@@ -37,6 +37,16 @@ class ApiService {
     options: RequestInit = {}
   ): Promise<ApiResponse<T>> {
     const url = `${this.baseURL}${endpoint}`
+    if (process.env.NODE_ENV !== 'production') {
+      // Lightweight client-side debug logging
+      try {
+        console.debug('[ApiService] request', {
+          url,
+          method: options.method || 'GET',
+          hasAuth: !!tokenService.getToken(),
+        })
+      } catch {}
+    }
     const config: RequestInit = {
       ...options,
       headers: {
@@ -48,22 +58,41 @@ class ApiService {
 
     try {
       const response = await fetch(url, config)
-      const data = await response.json()
+      const contentType = response.headers.get('content-type') || ''
+      const contentLength = Number(response.headers.get('content-length') || '0')
+
+      let parsed: any = null
+      if (response.status === 204 || contentLength === 0) {
+        parsed = null
+      } else if (contentType.includes('application/json')) {
+        try {
+          parsed = await response.json()
+        } catch (jsonErr) {
+          // Malformed JSON
+          const text = await response.text().catch(() => '')
+          throw new ApiError('Invalid JSON response', response.status, { text })
+        }
+      } else {
+        // Non-JSON response
+        parsed = await response.text().catch(() => '')
+      }
 
       if (!response.ok) {
-        throw new ApiError(
-          data.message || 'An error occurred',
-          response.status,
-          data
-        )
+        const message = (parsed && typeof parsed === 'object' && parsed.message) ? parsed.message : (typeof parsed === 'string' && parsed) || 'An error occurred'
+        throw new ApiError(message, response.status, parsed)
       }
 
-      return {
-        data,
+      const apiResponse = {
+        data: parsed as T,
         status: response.status,
-        message: data.message,
+        message: (parsed && (parsed as any).message) || undefined,
+      } as ApiResponse<T>
+      if (process.env.NODE_ENV !== 'production') {
+        try { console.debug('[ApiService] response', { url, status: response.status, contentType }) } catch {}
       }
+      return apiResponse
     } catch (error) {
+      try { console.error('[ApiService] error', error) } catch {}
       if (error instanceof ApiError) {
         throw error
       }
@@ -102,7 +131,35 @@ class ApiService {
     const path = template
       .replace('{id}', encodeURIComponent(id))
       .replace(':id', encodeURIComponent(id))
-    return this.request<ApiKey[]>(path)
+    try {
+      return await this.request<ApiKey[]>(path)
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        if (process.env.NODE_ENV !== 'production') {
+          try { console.debug('[ApiService] getProfileApiKeys: empty (404)', { id }) } catch {}
+        }
+        return { data: [], status: 404, message: 'Not found' }
+      }
+      throw e
+    }
+  }
+
+  // Create new API key for a profile
+  async createProfileApiKey(id: string, payload: { name: string }) {
+    const template = process.env.NEXT_PUBLIC_PROFILE_KEYS_PATH
+    if (!template) {
+      throw new ApiError(
+        'Profile API keys path is not configured. Set NEXT_PUBLIC_PROFILE_KEYS_PATH (e.g., /api/dashboard/profiles/{id}/keys).',
+        404
+      )
+    }
+    const path = template
+      .replace('{id}', encodeURIComponent(id))
+      .replace(':id', encodeURIComponent(id))
+    return this.request<CreatedApiKeyResponse>(path, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
   }
 
   // Profile API usage (paginated)
@@ -374,4 +431,11 @@ export type ApiKey = {
   profile_id: string
   subscription_plan: string
   updated_at: string
+}
+
+export type CreatedApiKeyResponse = {
+  id: string
+  key: string
+  message: string
+  name: string
 }
