@@ -16,6 +16,10 @@ export interface SignupData {
   email: string
   password: string
   confirmPassword: string
+  firstName?: string
+  lastName?: string
+  description?: string
+  website?: string
 }
 
 export interface AuthUser {
@@ -188,6 +192,9 @@ class AuthService {
       this.setToken(mapped.token)
       this.setUser(mapped.user)
 
+      // Check and assign default subscription plan if needed
+      await this.ensureDefaultSubscriptionPlan(data.id, data.access_token)
+
       return mapped
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Login failed')
@@ -199,16 +206,14 @@ class AuthService {
     try {
       const envRegister = process.env.NEXT_PUBLIC_AUTH_REGISTER_PATH
       // Build payload per Swagger schema
-      const firstName = (signupData.name || '').trim().split(/\s+/)[0] || signupData.name
-      const lastName = (signupData.name || '').trim().split(/\s+/).slice(1).join(' ') || ' '
       const signupPayload = {
-        description: '',
+        description: signupData.description ?? '',
         email: signupData.email,
-        first_name: firstName,
-        last_name: lastName,
+        first_name: signupData.firstName ?? '',
+        last_name: signupData.lastName ?? '',
         name: signupData.name,
         password: signupData.password,
-        website: ''
+        website: (signupData.website && signupData.website.trim()) ? signupData.website.trim() : 'N/A',
       }
 
       if (!envRegister) {
@@ -226,6 +231,9 @@ class AuthService {
         this.setRefreshToken(data.refreshToken)
       }
       this.setUser(data.user)
+
+      // Check and assign default subscription plan for new user
+      await this.ensureDefaultSubscriptionPlan(data.user.id, data.token)
 
       return data
     } catch (error) {
@@ -292,9 +300,46 @@ class AuthService {
       if (!token) {
         return false
       }
+      
+      // Get current user for ID substitution
+      const currentUser = this.getCurrentUser()
+      const userId = currentUser?.id || ''
+      
+      // Try environment variable first, then fallback to common auth verification endpoints
       const envVerify = process.env.NEXT_PUBLIC_AUTH_VERIFY_PATH
-      if (!envVerify) return false
-      const url = `${API_BASE_URL}${envVerify}`
+      let verifyPath: string
+      
+      if (envVerify) {
+        // Check if the env path looks like a payment endpoint (incorrect)
+        if (envVerify.includes('/payment')) {
+          if (process.env.NODE_ENV !== 'production') {
+            console.warn('[Auth] verifyToken: NEXT_PUBLIC_AUTH_VERIFY_PATH appears to be a payment endpoint, using fallback')
+          }
+          // Use fallback instead
+          verifyPath = `/api/dashboard/verify`
+        } else {
+          // Use env path with ID substitution
+          verifyPath = envVerify
+            .replace('{id}', encodeURIComponent(userId))
+            .replace(':id', encodeURIComponent(userId))
+        }
+      } else {
+        // Fallback to common auth verification endpoints
+        verifyPath = `/api/dashboard/verify`
+      }
+      
+      const url = `${API_BASE_URL}${verifyPath}`
+      if (process.env.NODE_ENV !== 'production') {
+        try { 
+          console.debug('[Auth] verifyToken →', { 
+            url, 
+            hasUserId: !!userId, 
+            envPath: envVerify,
+            finalPath: verifyPath 
+          }) 
+        } catch {}
+      }
+      
       const resp = await fetch(url, {
         method: 'GET',
         headers: { 'Authorization': `Bearer ${token}` },
@@ -302,6 +347,9 @@ class AuthService {
       return resp.ok
     } catch (error) {
       // Suppress noisy verification errors; treat as not verified
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[Auth] verifyToken: error during verification, treating as unverified.', error)
+      }
       return false
     }
   }
@@ -359,6 +407,33 @@ class AuthService {
       localStorage.setItem(this.USER_KEY, JSON.stringify(user))
     } catch {
       // ignore storage errors
+    }
+  }
+
+  // Ensure user has a default subscription plan
+  private async ensureDefaultSubscriptionPlan(userId: string, token: string): Promise<void> {
+    try {
+      // Import apiService dynamically to avoid circular dependency
+      const { apiService } = await import('./api')
+      
+      // Get user profile to check subscription plan
+      const profileResponse = await apiService.getCompanyProfile(userId)
+      const profile = profileResponse.data
+      
+      // Check if subscription plan is missing or empty
+      if (!profile?.subscription_plan || profile.subscription_plan.trim() === '') {
+        console.log('[Auth] Assigning default free subscription plan to user:', userId)
+        
+        // Assign default free tier
+        await apiService.updateSubscriptionPlan(userId, 'free')
+        
+        console.log('[Auth] Successfully assigned free subscription plan')
+      } else {
+        console.log('[Auth] User already has subscription plan:', profile.subscription_plan)
+      }
+    } catch (error) {
+      // Log error but don't fail login - subscription plan assignment is not critical
+      console.warn('[Auth] Failed to ensure default subscription plan:', error)
     }
   }
 

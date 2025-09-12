@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const UPSTREAM_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://api.ifalabs.com'
+// Choose upstream base from dedicated env, avoid recursion and invalid relative values
+const candidateUpstream =
+  process.env.PROXY_UPSTREAM_URL ||
+  process.env.NEXT_PUBLIC_UPSTREAM_URL ||
+  process.env.NEXT_PUBLIC_BACKEND_URL ||
+  process.env.BACKEND_API_URL ||
+  ''
+
+const isRelative = candidateUpstream.startsWith('/')
+const upstreamSafe = isRelative || !candidateUpstream ? 'https://api.ifalabs.com' : candidateUpstream
+const UPSTREAM_BASE = upstreamSafe.replace(/\/$/, '')
 
 async function handle(request: NextRequest, context: { params: { path: string[] } }) {
   const { params } = await Promise.resolve(context)
@@ -21,6 +31,9 @@ async function handle(request: NextRequest, context: { params: { path: string[] 
   }
 
   try {
+    if (process.env.NODE_ENV !== 'production') {
+      try { console.debug('[proxy] →', { url, method: request.method }) } catch {}
+    }
     const upstreamResponse = await fetch(url, init)
     const body = await upstreamResponse.arrayBuffer()
     const responseHeaders = new Headers()
@@ -29,12 +42,19 @@ async function handle(request: NextRequest, context: { params: { path: string[] 
       if (['transfer-encoding', 'connection'].includes(key.toLowerCase())) return
       responseHeaders.set(key, value)
     })
-    return new NextResponse(body, {
+    const proxied = new NextResponse(body, {
       status: upstreamResponse.status,
       statusText: upstreamResponse.statusText,
       headers: responseHeaders,
     })
+    if (process.env.NODE_ENV !== 'production') {
+      try { console.debug('[proxy] ←', { url, status: upstreamResponse.status }) } catch {}
+    }
+    return proxied
   } catch (error) {
+    if (process.env.NODE_ENV !== 'production') {
+      try { console.error('[proxy] error', { url, error: (error as Error)?.message }) } catch {}
+    }
     return NextResponse.json({ message: 'Proxy error', error: (error as Error).message }, { status: 502 })
   }
 }

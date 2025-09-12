@@ -32,38 +32,99 @@ class ApiService {
     return token ? { 'Authorization': `Bearer ${token}` } : {}
   }
 
+  private getApiKeyHeaders(): HeadersInit {
+    // For Oracle Engine price endpoints, we need API key authentication
+    const apiKey = this.getApiKey()
+    return apiKey ? { 'X-API-Key': apiKey } : {}
+  }
+
+  private getApiKey(): string | null {
+    if (typeof window === 'undefined') return null
+    return localStorage.getItem('oracle_api_key')
+  }
+
+  public setApiKey(apiKey: string): void {
+    if (typeof window === 'undefined') return
+    localStorage.setItem('oracle_api_key', apiKey)
+  }
+
+  public removeApiKey(): void {
+    if (typeof window === 'undefined') return
+    localStorage.removeItem('oracle_api_key')
+  }
+
   private async request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    suppress404Logging: boolean = false
   ): Promise<ApiResponse<T>> {
     const url = `${this.baseURL}${endpoint}`
+    if (process.env.NODE_ENV !== 'production') {
+      // Lightweight client-side debug logging
+      try {
+        console.log('[ApiService] request', {
+          url,
+          method: options.method || 'GET',
+          hasAuth: !!tokenService.getToken(),
+        })
+      } catch {}
+    }
+    // Determine if this is an Oracle Engine price endpoint that needs API key auth
+    const isOraclePriceEndpoint = endpoint.includes('/api/prices/') || endpoint.includes('/api/assets')
+    
     const config: RequestInit = {
       ...options,
       headers: {
         ...this.defaultHeaders,
-        ...this.getAuthHeaders(),
+        ...(isOraclePriceEndpoint ? this.getApiKeyHeaders() : this.getAuthHeaders()),
         ...options.headers,
       },
     }
 
     try {
       const response = await fetch(url, config)
-      const data = await response.json()
+      const contentType = response.headers.get('content-type') || ''
+      const contentLength = Number(response.headers.get('content-length') || '0')
+
+      let parsed: any = null
+      if (response.status === 204 || contentLength === 0) {
+        parsed = null
+      } else if (contentType.includes('application/json')) {
+        try {
+          parsed = await response.json()
+        } catch (jsonErr) {
+          // Malformed JSON
+          const text = await response.text().catch(() => '')
+          throw new ApiError('Invalid JSON response', response.status, { text })
+        }
+      } else {
+        // Non-JSON response
+        parsed = await response.text().catch(() => '')
+      }
 
       if (!response.ok) {
-        throw new ApiError(
-          data.message || 'An error occurred',
-          response.status,
-          data
-        )
+        const message = (parsed && typeof parsed === 'object' && parsed.message) ? parsed.message : (typeof parsed === 'string' && parsed) || 'An error occurred'
+        throw new ApiError(message, response.status, parsed)
       }
 
-      return {
-        data,
+      const apiResponse = {
+        data: parsed as T,
         status: response.status,
-        message: data.message,
+        message: (parsed && (parsed as any).message) || undefined,
+      } as ApiResponse<T>
+      if (process.env.NODE_ENV !== 'production') {
+        try { console.debug('[ApiService] response', { url, status: response.status, contentType }) } catch {}
       }
+      return apiResponse
     } catch (error) {
+      // Only log non-404 errors to reduce noise, or if 404 logging is not suppressed
+      if (error instanceof ApiError && error.status === 404) {
+        if (!suppress404Logging && process.env.NODE_ENV !== 'production') {
+          try { console.debug('[ApiService] 404 (handled by caller)', { url, status: 404 }) } catch {}
+        }
+      } else {
+        try { console.error('[ApiService] error', error) } catch {}
+      }
       if (error instanceof ApiError) {
         throw error
       }
@@ -77,33 +138,192 @@ class ApiService {
 
   // Company profile
   async getCompanyProfile(id: string) {
-    const template = process.env.NEXT_PUBLIC_COMPANY_PROFILE_PATH
-    if (!template) {
-      throw new ApiError(
-        'Company profile path is not configured. Set NEXT_PUBLIC_COMPANY_PROFILE_PATH (e.g., /api/dashboard/profile/{id}).',
-        404
-      )
+    const tpl = process.env.NEXT_PUBLIC_COMPANY_PROFILE_PATH || ''
+    const expand = (s: string): string | null => s
+      ? s.replace('{id}', encodeURIComponent(id)).replace(':id', encodeURIComponent(id))
+      : null
+    const candidates: string[] = []
+    const primary = expand(tpl)
+    if (primary) candidates.push(primary)
+    // Common alternates
+    candidates.push(`/dashboard/${encodeURIComponent(id)}/profile`)
+    candidates.push(`/api/dashboard/${encodeURIComponent(id)}/profile`)
+    candidates.push(`/dashboard/profile/${encodeURIComponent(id)}`)
+
+    if (process.env.NODE_ENV !== 'production') {
+      try { console.debug('[ApiService] getCompanyProfile:candidates', candidates) } catch {}
     }
-    const path = template
-      .replace('{id}', encodeURIComponent(id))
-      .replace(':id', encodeURIComponent(id))
-    return this.request<CompanyProfile>(path)
+    return this.requestFallback<CompanyProfile>(Array.from(new Set(candidates)))
+  }
+
+  // Update company profile
+  async updateCompanyProfile(id: string, payload: {
+    description?: string
+    first_name?: string
+    last_name?: string
+    logo_url?: string
+    name: string
+    website?: string
+    subscription_plan?: string
+  }) {
+    const tpl = process.env.NEXT_PUBLIC_COMPANY_PROFILE_PATH || ''
+    const expand = (s: string): string | null => s
+      ? s.replace('{id}', encodeURIComponent(id)).replace(':id', encodeURIComponent(id))
+      : null
+    const candidates: string[] = []
+    const primary = expand(tpl)
+    if (primary) candidates.push(primary)
+    candidates.push(`/dashboard/${encodeURIComponent(id)}/profile`)
+    candidates.push(`/api/dashboard/${encodeURIComponent(id)}/profile`)
+    candidates.push(`/dashboard/profile/${encodeURIComponent(id)}`)
+
+    const unique = Array.from(new Set(candidates))
+    if (process.env.NODE_ENV !== 'production') {
+      try { console.debug('[ApiService] updateCompanyProfile:candidates', unique) } catch {}
+    }
+    return this.requestFallback<CompanyProfile>(unique, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    })
+  }
+
+  // Update subscription plan specifically
+  async updateSubscriptionPlan(id: string, subscriptionPlan: string) {
+    return this.updateCompanyProfile(id, { 
+      name: '', // Required field, will be ignored by backend
+      subscription_plan: subscriptionPlan 
+    })
   }
 
   // Profile API keys
+  // Helper function to normalize API key data from different possible response formats
+  private normalizeApiKeyData(rawData: any, userSubscriptionPlan?: string): ApiKey {
+    console.log('[ApiService] normalizeApiKeyData:input', rawData)
+    console.log('[ApiService] normalizeApiKeyData:all-fields', Object.keys(rawData))
+    
+    const normalized = {
+      id: rawData.id || rawData.key_id || rawData.api_key_id || '',
+      key: rawData.key || rawData.api_key || rawData.token || rawData.secret || '',
+      name: rawData.name || rawData.key_name || rawData.title || '',
+      subscription_plan: rawData.subscription_plan || rawData.plan || rawData.subscription || rawData.tier || userSubscriptionPlan || 'free',
+      is_active: rawData.is_active !== undefined ? rawData.is_active : (rawData.active !== undefined ? rawData.active : true),
+      last_used: rawData.last_used || rawData.last_accessed || rawData.used_at || '',
+      created_at: rawData.created_at || rawData.created || rawData.createdAt || '',
+      updated_at: rawData.updated_at || rawData.updated || rawData.updatedAt || '',
+      profile_id: rawData.profile_id || rawData.user_id || rawData.owner_id || '',
+      // Keep original fields for debugging
+      api_key: rawData.api_key,
+      token: rawData.token,
+      secret: rawData.secret,
+      plan: rawData.plan,
+      subscription: rawData.subscription,
+    }
+    
+    console.log('[ApiService] normalizeApiKeyData:output', normalized)
+    return normalized
+  }
+
   async getProfileApiKeys(id: string) {
     const template = process.env.NEXT_PUBLIC_PROFILE_KEYS_PATH
-    if (!template) {
-      throw new ApiError(
-        'Profile API keys path is not configured. Set NEXT_PUBLIC_PROFILE_KEYS_PATH (e.g., /api/dashboard/profiles/{id}/keys).',
-        404
-      )
+    const expand = (s: string): string | null => s
+      ? s.replace('{id}', encodeURIComponent(id)).replace(':id', encodeURIComponent(id))
+      : null
+    
+    const candidates: string[] = []
+    const primary = expand(template || '')
+    if (primary) candidates.push(primary)
+    
+    // Common fallback endpoints for API keys
+    candidates.push(`/api/dashboard/${encodeURIComponent(id)}/api-keys`)
+    candidates.push(`/api/dashboard/${encodeURIComponent(id)}/keys`)
+    candidates.push(`/dashboard/${encodeURIComponent(id)}/api-keys`)
+    candidates.push(`/dashboard/${encodeURIComponent(id)}/keys`)
+    candidates.push(`/api/dashboard/profiles/${encodeURIComponent(id)}/keys`)
+    candidates.push(`/dashboard/profiles/${encodeURIComponent(id)}/keys`)
+
+    console.log('[ApiService] getProfileApiKeys:starting', { id, candidates })
+
+    // Try all candidates, but treat 404s as empty list
+    let lastError: unknown = null
+    for (const endpoint of candidates) {
+      try {
+        const response = await this.request<any[]>(endpoint, {}, true) // Suppress 404 logging
+        console.log('[ApiService] getProfileApiKeys:success', { endpoint, id, response, rawData: response.data })
+        console.log('[ApiService] getProfileApiKeys:rawData-detail', response.data)
+        
+        // Get user's subscription plan from profile
+        let userSubscriptionPlan = 'free' // default
+        try {
+          const profileResponse = await this.getCompanyProfile(id)
+          userSubscriptionPlan = profileResponse.data?.subscription_plan || 'free'
+          console.log('[ApiService] getProfileApiKeys:user-subscription', { userSubscriptionPlan })
+        } catch (err) {
+          console.log('[ApiService] getProfileApiKeys:profile-fetch-failed', err)
+        }
+
+        // Normalize the response data
+        const normalizedData = response.data.map(item => this.normalizeApiKeyData(item, userSubscriptionPlan))
+        console.log('[ApiService] getProfileApiKeys:normalized', normalizedData)
+        
+        return {
+          ...response,
+          data: normalizedData
+        }
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 404) {
+        console.log('[ApiService] getProfileApiKeys: 404 treated as empty list', { endpoint, id })
+          return { data: [], status: 404, message: 'No API keys found' }
+        }
+        lastError = err
+      }
     }
-    const path = template
-      .replace('{id}', encodeURIComponent(id))
-      .replace(':id', encodeURIComponent(id))
-    return this.request<ApiKey[]>(path)
+    
+    // If we get here, all endpoints failed with non-404 errors
+    if (lastError instanceof ApiError) throw lastError
+    throw new ApiError('All API key endpoints failed', 0, lastError)
   }
+
+  // Create new API key for a profile
+  async createProfileApiKey(id: string, payload: { name: string }) {
+    const template = process.env.NEXT_PUBLIC_PROFILE_KEYS_CREATE_PATH || '/dashboard/{id}/api-keys'
+    const expand = (s: string): string | null => s
+      ? s.replace('{id}', encodeURIComponent(id)).replace(':id', encodeURIComponent(id))
+      : null
+    
+    const candidates: string[] = []
+    const primary = expand(template)
+    if (primary) candidates.push(primary)
+    
+    // Common fallback endpoints for creating API keys
+    candidates.push(`/api/dashboard/${encodeURIComponent(id)}/api-keys`)
+    candidates.push(`/api/dashboard/${encodeURIComponent(id)}/keys`)
+    candidates.push(`/dashboard/${encodeURIComponent(id)}/api-keys`)
+    candidates.push(`/dashboard/${encodeURIComponent(id)}/keys`)
+    candidates.push(`/api/dashboard/profiles/${encodeURIComponent(id)}/keys`)
+    candidates.push(`/dashboard/profiles/${encodeURIComponent(id)}/keys`)
+
+    console.log('[ApiService] createProfileApiKey:candidates', {
+          candidates,
+          profileId: id,
+          payload
+        })
+  
+    const response = await this.requestFallback<CreatedApiKeyResponse>(candidates, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+    
+    console.log('[ApiService] createProfileApiKey:success', { response, payload, rawData: response.data })
+    console.log('[ApiService] createProfileApiKey:rawData-detail', response.data)
+    
+    return response
+  }
+
+  // Create new API key for a profile (with env fallback)
+  async createProfileApiKeyWithEnv(id: string, payload: { name: string }) {
+    return this.createProfileApiKey(id, payload)
+  }
+
 
   // Profile API usage (paginated)
   async getProfileUsage(id: string, page: number = 1, limit: number = 20) {
@@ -136,14 +356,20 @@ class ApiService {
     endpoints: string[],
     options: RequestInit = {}
   ): Promise<ApiResponse<T>> {
+    console.log('[ApiService] requestFallback:starting', { endpoints, method: options.method || 'GET' })
     let lastError: unknown = null
     for (const ep of endpoints) {
       try {
-        return await this.request<T>(ep, options)
+        console.log('[ApiService] requestFallback:trying', { endpoint: ep })
+        const result = await this.request<T>(ep, options)
+        console.log('[ApiService] requestFallback:success', { endpoint: ep, result })
+        return result
       } catch (err) {
+        console.log('[ApiService] requestFallback:failed', { endpoint: ep, error: err })
         lastError = err
       }
     }
+    console.log('[ApiService] requestFallback:all-failed', { lastError })
     if (lastError instanceof ApiError) throw lastError
     throw new ApiError('All endpoints failed', 0, lastError)
   }
@@ -171,7 +397,30 @@ class ApiService {
     return this.request(envPath)
   }
 
-  // API Keys endpoints
+  // Oracle Engine Price Endpoints
+  async getLastPrice(assetId?: string): Promise<ApiResponse<OraclePrice | Record<string, OraclePrice>>> {
+    const endpoint = process.env.NEXT_PUBLIC_PRICES_LAST_PATH || '/api/prices/last'
+    const url = assetId ? `${endpoint}?asset=${encodeURIComponent(assetId)}` : endpoint
+    return this.request<OraclePrice | Record<string, OraclePrice>>(url)
+  }
+
+  async getPriceStream(): Promise<ApiResponse<EventSource>> {
+    const endpoint = process.env.NEXT_PUBLIC_PRICES_STREAM_PATH || '/api/prices/stream'
+    // For SSE, we'll return the endpoint URL for EventSource creation
+    return this.request<EventSource>(endpoint)
+  }
+
+  async getAssets(): Promise<ApiResponse<OracleAsset[]>> {
+    const endpoint = process.env.NEXT_PUBLIC_ASSETS_PATH || '/api/assets'
+    return this.request<OracleAsset[]>(endpoint)
+  }
+
+  async getSubscriptionPlans(): Promise<ApiResponse<SubscriptionPlansResponse>> {
+    const endpoint = process.env.NEXT_PUBLIC_SUBSCRIPTION_PLANS_PATH || '/api/subscription/plans'
+    return this.request<SubscriptionPlansResponse>(endpoint)
+  }
+
+  // Oracle Engine API Keys endpoints (for price access)
   async getApiKeys() {
     return this.request('/api/keys')
   }
@@ -183,8 +432,32 @@ class ApiService {
     })
   }
 
-  async deleteApiKey(keyId: string) {
-    return this.request(`/api/keys/${keyId}`, {
+  async deleteApiKey(userId: string, keyId: string) {
+    // Use the same pattern as create/get API keys
+    const template = process.env.NEXT_PUBLIC_PROFILE_KEYS_PATH || '/api/dashboard/{id}/api-keys'
+    const expand = (s: string): string | null => s
+      ? s.replace('{id}', encodeURIComponent(userId)).replace(':id', encodeURIComponent(userId))
+      : null
+    
+    const basePath = expand(template)
+    if (!basePath) {
+      throw new Error('Invalid API keys path template')
+    }
+
+    // Try multiple endpoint patterns for API key deletion
+    const candidates = [
+      `${basePath}/${keyId}`,                    // Correct Oracle Engine pattern
+      `/api/dashboard/${encodeURIComponent(userId)}/api-keys/${keyId}`,  // Direct pattern
+      `/api/dashboard/api-keys/${keyId}`,        // Fallback pattern
+      `/api/keys/${keyId}`,                      // Generic pattern
+      `/api/dashboard/keys/${keyId}`,            // Alternative pattern
+    ]
+    
+    if (process.env.NODE_ENV !== 'production') {
+      try { console.debug('[ApiService] deleteApiKey:candidates', candidates) } catch {}
+    }
+    
+    return this.requestFallback(candidates, {
       method: 'DELETE',
     })
   }
@@ -374,4 +647,65 @@ export type ApiKey = {
   profile_id: string
   subscription_plan: string
   updated_at: string
+  // Alternative field names that might be returned by the API
+  api_key?: string
+  token?: string
+  secret?: string
+  plan?: string
+  subscription?: string
+}
+
+export type CreatedApiKeyResponse = {
+  id: string
+  key: string
+  message: string
+  name: string
+}
+
+// Oracle Engine specific types
+export type OraclePrice = {
+  id: string
+  assetID: string
+  value: number
+  expo: number
+  timestamp: string
+  source: string
+  req_hash: string
+  req_url: string
+  is_aggr: boolean
+  connected_price_ids: string[]
+  price_changes?: PriceChange[]
+}
+
+export type PriceChange = {
+  period: string
+  change: number
+  change_pct: number
+  from_price: number
+  to_price: number
+  from_time: string
+  to_time: string
+}
+
+export type OracleAsset = {
+  asset_id: string
+  asset: string
+}
+
+export type SubscriptionPlan = {
+  name: string
+  price: number
+  api_requests: number
+  rate_limit_per_hour: number
+  rate_limit_per_day: number
+  data_access: string
+  custom_pairs: number
+  request_cost: number
+  support: string
+  historical_data: boolean
+  private_data: boolean
+}
+
+export type SubscriptionPlansResponse = {
+  plans: Record<string, SubscriptionPlan>
 }
