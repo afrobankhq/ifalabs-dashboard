@@ -32,6 +32,7 @@ export default function ApiKeysPage() {
   const [newKeyName, setNewKeyName] = useState("")
   const [creating, setCreating] = useState<boolean>(false)
   const [visibleKeys, setVisibleKeys] = useState<Set<string>>(new Set())
+  const [newlyCreatedKeys, setNewlyCreatedKeys] = useState<Map<string, string>>(new Map())
   const { toast } = useToast()
 
   useEffect(() => {
@@ -40,7 +41,7 @@ export default function ApiKeysPage() {
         setLoading(true)
         setError(null)
         const profileId = user?.id
-        console.debug('[API Keys] load:start', {
+        console.log('[API Keys] load:start', {
           profileId,
           API_URL: process.env.NEXT_PUBLIC_API_URL || '(proxy /api/proxy)',
           PROFILE_KEYS_PATH: process.env.NEXT_PUBLIC_PROFILE_KEYS_PATH,
@@ -52,7 +53,7 @@ export default function ApiKeysPage() {
           return
         }
         const result = await apiService.getProfileApiKeys(profileId)
-        console.debug('[API Keys] load:success', { count: Array.isArray(result.data) ? result.data.length : null, status: result.status })
+        console.log('[API Keys] load:success', { count: Array.isArray(result.data) ? result.data.length : null, status: result.status, data: result.data })
         setApiKeys(result.data || [])
       } catch (e) {
         console.error('[API Keys] load:error', e)
@@ -60,7 +61,7 @@ export default function ApiKeysPage() {
           // Treat 404 as no keys yet
           setError(null)
           setApiKeys([])
-          console.debug('[API Keys] load:empty (404)')
+          console.log('[API Keys] load:empty (404)')
         } else {
           setError("Failed to load API keys")
           setApiKeys([])
@@ -70,7 +71,15 @@ export default function ApiKeysPage() {
         console.debug('[API Keys] load:done')
       }
     }
-    load()
+    
+    // Only load if user is available
+    if (user?.id) {
+      load()
+    } else {
+      // If no user, set loading to false and clear API keys
+      setLoading(false)
+      setApiKeys([])
+    }
   }, [user])
 
   const handleCreateApiKey = async (e?: React.FormEvent) => {
@@ -85,10 +94,27 @@ export default function ApiKeysPage() {
     }
     try {
       setCreating(true)
-      console.debug('[API Keys] create:start', { profileId: user.id, payload: { name: newKeyName } })
+      console.log('[API Keys] create:start', { profileId: user.id, payload: { name: newKeyName } })
       const res = await apiService.createProfileApiKey(user.id, { name: newKeyName })
-      console.debug('[API Keys] create:success', { status: res.status, data: res.data })
-      toast({ title: "API Key Created", description: "Key created successfully." })
+      console.log('[API Keys] create:success', { status: res.status, data: res.data })
+      
+      // Store the newly created key so it can be copied
+      if (res.data?.id && res.data?.key) {
+        setNewlyCreatedKeys(prev => new Map(prev).set(res.data.id, res.data.key))
+        console.log('[API Keys] create:stored-key', { keyId: res.data.id, key: res.data.key })
+        
+        // Remove the stored key after 5 minutes for security
+        setTimeout(() => {
+          setNewlyCreatedKeys(prev => {
+            const newMap = new Map(prev)
+            newMap.delete(res.data.id)
+            console.log('[API Keys] create:removed-stored-key', { keyId: res.data.id })
+            return newMap
+          })
+        }, 5 * 60 * 1000) // 5 minutes
+      }
+      
+      toast({ title: "API Key Created", description: "Key created successfully. You can copy it now." })
       setIsCreateDialogOpen(false)
       resetCreateState()
       await refreshKeys()
@@ -97,7 +123,7 @@ export default function ApiKeysPage() {
       toast({ title: "Error", description: "Failed to create API key.", variant: "destructive" })
     } finally {
       setCreating(false)
-      console.debug('[API Keys] create:done')
+      console.log('[API Keys] create:done')
     }
   }
 
@@ -126,15 +152,63 @@ export default function ApiKeysPage() {
     resetCreateState()
   }
 
-  const handleDeleteApiKey = (id: string) => {
-    setApiKeys(apiKeys.filter((key) => key.id !== id))
-    toast({
-      title: "API Key Deleted",
-      description: "The API key has been permanently deleted.",
-    })
+  const handleDeleteApiKey = async (id: string) => {
+    try {
+      console.debug('[API Keys] delete:start', { keyId: id })
+      
+      // Call the API to delete the key
+      if (!user?.id) {
+        throw new Error('User not authenticated')
+      }
+      await apiService.deleteApiKey(user.id, id)
+      
+      // Remove from local state
+      setApiKeys(apiKeys.filter((key) => key.id !== id))
+      
+      console.debug('[API Keys] delete:success', { keyId: id })
+      toast({
+        title: "API Key Deleted",
+        description: "The API key has been permanently deleted.",
+      })
+    } catch (error) {
+      console.error('[API Keys] delete:error', error)
+      toast({
+        title: "Error",
+        description: "Failed to delete API key. Please try again.",
+        variant: "destructive"
+      })
+    }
   }
 
-  const handleCopyKey = (key: string) => {
+  const handleCopyKey = (apiKey: ApiKey) => {
+    console.log('[API Keys] handleCopyKey:called', apiKey)
+    
+    // Check if this is a newly created key that we have stored
+    const storedKey = newlyCreatedKeys.get(apiKey.id)
+    console.log('[API Keys] handleCopyKey:stored-key-check', { keyId: apiKey.id, storedKey })
+    
+    // Try different possible field names for the key
+    const key = storedKey || apiKey.key || apiKey.api_key || apiKey.token || apiKey.secret
+    console.log('[API Keys] handleCopyKey:key-found', { key, hasKey: !!key })
+    console.log('[API Keys] handleCopyKey:all-fields', {
+      storedKey,
+      key: apiKey.key,
+      api_key: apiKey.api_key,
+      token: apiKey.token,
+      secret: apiKey.secret
+    })
+    
+    if (!key) {
+      console.log('[API Keys] handleCopyKey:no-key-available')
+      toast({
+        title: "Key not available",
+        description: "API keys are only shown once during creation for security reasons. If you need the key, you'll need to create a new one.",
+        variant: "destructive"
+      })
+      return
+    }
+    
+    console.log('[API Keys] handleCopyKey:copying-key', { key })
     navigator.clipboard.writeText(key)
     toast({
       title: "Copied to clipboard",
@@ -152,7 +226,13 @@ export default function ApiKeysPage() {
     setVisibleKeys(newVisibleKeys)
   }
 
-  const maskKey = (key: string) => {
+  const maskKey = (apiKey: ApiKey) => {
+    // Check if this is a newly created key that we have stored
+    const storedKey = newlyCreatedKeys.get(apiKey.id)
+    // Try different possible field names for the key
+    const key = storedKey || apiKey.key || apiKey.api_key || apiKey.token || apiKey.secret
+    if (!key) return "Key hidden for security"
+    if (key.length <= 16) return key // Don't mask short keys
     return key.substring(0, 12) + "..." + key.substring(key.length - 4)
   }
 
@@ -165,13 +245,14 @@ export default function ApiKeysPage() {
           <h1 className="text-3xl font-bold tracking-tight">API Keys</h1>
           <p className="text-muted-foreground">Manage your API keys for different environments and applications.</p>
         </div>
-        <Dialog open={isCreateDialogOpen} onOpenChange={(open) => { setIsCreateDialogOpen(open); if (!open) resetCreateState() }}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-2 h-4 w-4" />
-              Create API Key
-            </Button>
-          </DialogTrigger>
+        {apiKeys.length === 0 && (
+          <Dialog open={isCreateDialogOpen} onOpenChange={(open) => { setIsCreateDialogOpen(open); if (!open) resetCreateState() }}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="mr-2 h-4 w-4" />
+                Create API Key
+              </Button>
+            </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Create New API Key</DialogTitle>
@@ -188,16 +269,17 @@ export default function ApiKeysPage() {
                   value={newKeyName}
                   onChange={(e) => setNewKeyName(e.target.value)}
                 />
-              </div>
-              <DialogFooter>
+            </div>
+            <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setIsCreateDialogOpen(false)} disabled={creating}>
-                  Cancel
-                </Button>
+                Cancel
+              </Button>
                 <Button type="submit" disabled={creating}>{creating ? "Creating..." : "Create API Key"}</Button>
-              </DialogFooter>
+            </DialogFooter>
             </form>
           </DialogContent>
         </Dialog>
+        )}
       </div>
 
       {/* Stats */}
@@ -210,7 +292,7 @@ export default function ApiKeysPage() {
           <CardContent>
             <div className="text-2xl font-bold">{loading ? "—" : apiKeys.length}</div>
             {!loading && (
-              <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
                 {apiKeys.filter((k) => k.is_active).length} active
               </p>
             )}
@@ -248,18 +330,26 @@ export default function ApiKeysPage() {
                   <TableCell>
                     <div className="flex items-center gap-2">
                       <code className="text-sm bg-muted px-2 py-1 rounded">
-                        {visibleKeys.has(apiKey.id) ? apiKey.key : maskKey(apiKey.key)}
+                        {visibleKeys.has(apiKey.id) ? (newlyCreatedKeys.get(apiKey.id) || apiKey.key || apiKey.api_key || apiKey.token || apiKey.secret || "Key hidden for security") : maskKey(apiKey)}
                       </code>
                       <Button variant="ghost" size="sm" onClick={() => toggleKeyVisibility(apiKey.id)}>
                         {visibleKeys.has(apiKey.id) ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => handleCopyKey(apiKey.key)}>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={() => {
+                          console.log('[API Keys] copy-button-clicked', { apiKey })
+                          handleCopyKey(apiKey)
+                        }}
+                        disabled={false}
+                      >
                         <Copy className="h-4 w-4" />
                       </Button>
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="secondary">{apiKey.subscription_plan || "—"}</Badge>
+                    <Badge variant="secondary">{apiKey.subscription_plan || apiKey.plan || apiKey.subscription || "—"}</Badge>
                   </TableCell>
                   <TableCell>{apiKey.last_used ? new Date(apiKey.last_used).toLocaleDateString() : "Never"}</TableCell>
                   <TableCell>
@@ -273,7 +363,13 @@ export default function ApiKeysPage() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => handleCopyKey(apiKey.key)}>
+                        <DropdownMenuItem 
+                          onClick={() => {
+                            console.log('[API Keys] dropdown-copy-clicked', { apiKey })
+                            handleCopyKey(apiKey)
+                          }}
+                          disabled={false}
+                        >
                           <Copy className="mr-2 h-4 w-4" />
                           Copy Key
                         </DropdownMenuItem>
@@ -297,6 +393,16 @@ export default function ApiKeysPage() {
                 <TableRow>
                   <TableCell colSpan={6} className="text-muted-foreground">
                     No API keys found.
+                  </TableCell>
+                </TableRow>
+              )}
+              {!loading && apiKeys.length > 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-xs text-muted-foreground bg-muted/50">
+                    <div className="flex items-center gap-2 p-2">
+                      <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
+                      <span>API keys are only shown once during creation for security. Use the copy button if you have the key available.</span>
+                    </div>
                   </TableCell>
                 </TableRow>
               )}

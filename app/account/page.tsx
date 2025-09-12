@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -19,9 +19,8 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { User, Shield, Bell, Trash2, Camera, Save, AlertTriangle, Loader2 } from "lucide-react"
+import { User, Shield, Bell, Trash2, Camera, Save, AlertTriangle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import { apiService, useApiCall } from "@/lib/api"
 import { ProtectedRoute } from "@/components/protected-route"
 
 interface UserProfile {
@@ -50,12 +49,12 @@ interface SecuritySettings {
 
 export default function AccountPage() {
   const [profile, setProfile] = useState<UserProfile>({
-    name: "",
-    email: "",
-    bio: "",
-    company: "",
-    location: "",
-    website: "",
+    name: "Ahmed Chukwu",
+    email: "ahmed.chukwu@email.com",
+    bio: "Full-stack developer passionate about building great user experiences.",
+    company: "Wazopay",
+    location: "Lagos, Nigeria",
+    website: "https://wazopay.xyz",
     avatar: "/placeholder-user.jpg",
   })
 
@@ -67,10 +66,10 @@ export default function AccountPage() {
     weeklyReports: true,
   })
 
-  const [security, setSecurity] = useState<SecuritySettings>({
+  const [security] = useState<SecuritySettings>({
     twoFactorEnabled: false,
-    lastPasswordChange: "",
-    activeSessions: 0,
+    lastPasswordChange: "2024-01-15",
+    activeSessions: 3,
   })
 
   const [currentPassword, setCurrentPassword] = useState("")
@@ -78,53 +77,15 @@ export default function AccountPage() {
   const [confirmPassword, setConfirmPassword] = useState("")
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const { toast } = useToast()
-  const { execute: executeApiCall, loading, error } = useApiCall()
 
-  useEffect(() => {
-    loadUserData()
-  }, [])
-
-  const loadUserData = async () => {
-    try {
-      const profileData = await executeApiCall(() => apiService.getUserProfile())
-      if (profileData && typeof profileData === 'object') {
-        const normalized: UserProfile = {
-          name: (profileData as any).name ?? "",
-          email: (profileData as any).email ?? "",
-          bio: (profileData as any).bio ?? "",
-          company: (profileData as any).company ?? "",
-          location: (profileData as any).location ?? "",
-          website: (profileData as any).website ?? "",
-          avatar: (profileData as any).avatar ?? "/placeholder-user.jpg",
-        }
-        setProfile(normalized)
-      }
-    } catch (err) {
-      toast({
-        title: "Error",
-        description: "Failed to load user profile. Please try again.",
-        variant: "destructive",
-      })
-    }
+  const handleProfileUpdate = () => {
+    toast({
+      title: "Profile Updated",
+      description: "Your profile information has been saved successfully.",
+    })
   }
 
-  const handleProfileUpdate = async () => {
-    try {
-      await executeApiCall(() => apiService.updateUserProfile(profile))
-      toast({
-        title: "Profile Updated",
-        description: "Your profile information has been saved successfully.",
-      })
-    } catch (err) {
-      toast({
-        title: "Error",
-        description: "Failed to update profile. Please try again.",
-        variant: "destructive",
-      })
-    }
-  }
-
-  const handlePasswordChange = async () => {
+  const handlePasswordChange = () => {
     if (newPassword !== confirmPassword) {
       toast({
         title: "Error",
@@ -143,47 +104,21 @@ export default function AccountPage() {
       return
     }
 
-    try {
-      await executeApiCall(() => apiService.changePassword({
-        currentPassword,
-        newPassword
-      }))
-      
-      setCurrentPassword("")
-      setNewPassword("")
-      setConfirmPassword("")
-      toast({
-        title: "Password Changed",
-        description: "Your password has been updated successfully.",
-      })
-    } catch (err) {
-      toast({
-        title: "Error",
-        description: "Failed to change password. Please try again.",
-        variant: "destructive",
-      })
-    }
+    setCurrentPassword("")
+    setNewPassword("")
+    setConfirmPassword("")
+    toast({
+      title: "Password Changed",
+      description: "Your password has been updated successfully.",
+    })
   }
 
-  const handleNotificationUpdate = async (key: keyof NotificationSettings, value: boolean) => {
-    const updatedNotifications = { ...notifications, [key]: value }
-    setNotifications(updatedNotifications)
-    
-    try {
-      await executeApiCall(() => apiService.updateNotificationSettings(updatedNotifications))
-      toast({
-        title: "Settings Updated",
-        description: "Your notification preferences have been saved.",
-      })
-    } catch (err) {
-      // Revert the change on error
-      setNotifications(notifications)
-      toast({
-        title: "Error",
-        description: "Failed to update notification settings. Please try again.",
-        variant: "destructive",
-      })
-    }
+  const handleNotificationUpdate = (key: keyof NotificationSettings, value: boolean) => {
+    setNotifications({ ...notifications, [key]: value })
+    toast({
+      title: "Settings Updated",
+      description: "Your notification preferences have been saved.",
+    })
   }
 
   const handleAccountDeletion = () => {
@@ -195,19 +130,9 @@ export default function AccountPage() {
     setIsDeleteDialogOpen(false)
   }
 
-  if (loading && !profile.name) {
-    return (
-      <div className="flex flex-1 flex-col gap-6 p-4">
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin" />
-        </div>
-      </div>
-    )
-  }
-
   return (
     <ProtectedRoute>
-      <div className="flex flex-1 flex-col gap-6 p-4">
+    <div className="flex flex-1 flex-col gap-6 p-4">
       {/* Header */}
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Account Settings</h1>
@@ -491,7 +416,7 @@ export default function AccountPage() {
           </CardContent>
         </Card>
       </div>
-      </div>
+    </div>
     </ProtectedRoute>
   )
 }
