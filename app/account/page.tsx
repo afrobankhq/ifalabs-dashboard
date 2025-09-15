@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -19,18 +19,33 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { User, Shield, Bell, Trash2, Camera, Save, AlertTriangle } from "lucide-react"
+import { User, Shield, Bell, Trash2, Camera, Save, AlertTriangle, Edit, Loader2 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { apiService, useApiCall } from "@/lib/api"
+import { useAuth } from "@/lib/auth-context"
 import { ProtectedRoute } from "@/components/protected-route"
 
-interface UserProfile {
+interface CompanyProfile {
+  id: string
   name: string
   email: string
-  bio: string
-  company: string
-  location: string
+  first_name: string
+  last_name: string
+  description: string
   website: string
-  avatar: string
+  logo_url: string
+  subscription_plan: string
+  created_at: string
+  updated_at: string
+}
+
+interface UpdateProfileRequest {
+  name: string
+  first_name: string
+  last_name: string
+  description: string
+  website: string
+  logo_url: string
 }
 
 interface NotificationSettings {
@@ -48,15 +63,17 @@ interface SecuritySettings {
 }
 
 export default function AccountPage() {
-  const [profile, setProfile] = useState<UserProfile>({
-    name: "Ahmed Chukwu",
-    email: "ahmed.chukwu@email.com",
-    bio: "Full-stack developer passionate about building great user experiences.",
-    company: "Wazopay",
-    location: "Lagos, Nigeria",
-    website: "https://wazopay.xyz",
-    avatar: "/placeholder-user.jpg",
+  const [profile, setProfile] = useState<CompanyProfile | null>(null)
+  const [editProfile, setEditProfile] = useState<UpdateProfileRequest>({
+    name: "",
+    first_name: "",
+    last_name: "",
+    description: "",
+    website: "",
+    logo_url: "",
   })
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
 
   const [notifications, setNotifications] = useState<NotificationSettings>({
     emailNotifications: true,
@@ -77,12 +94,81 @@ export default function AccountPage() {
   const [confirmPassword, setConfirmPassword] = useState("")
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const { toast } = useToast()
+  const { execute: executeApiCall, loading, error } = useApiCall()
+  const { user } = useAuth()
 
-  const handleProfileUpdate = () => {
-    toast({
-      title: "Profile Updated",
-      description: "Your profile information has been saved successfully.",
-    })
+  useEffect(() => {
+    if (!user) return
+    loadProfile()
+  }, [user])
+
+  const loadProfile = async () => {
+    try {
+      setIsLoading(true)
+      const profileData = await executeApiCall(() => apiService.getCompanyProfile(user!.id))
+      if (profileData && typeof profileData === 'object') {
+        const profileResponse = profileData as CompanyProfile
+        setProfile(profileResponse)
+        // Initialize edit form with current data
+        setEditProfile({
+          name: profileResponse.name || "",
+          first_name: profileResponse.first_name || "",
+          last_name: profileResponse.last_name || "",
+          description: profileResponse.description || "",
+          website: profileResponse.website || "",
+          logo_url: profileResponse.logo_url || "",
+        })
+      }
+    } catch (err) {
+      console.error('Failed to load profile:', err)
+      toast({
+        title: "Error",
+        description: "Failed to load profile information. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleProfileUpdate = async () => {
+    if (!user || !profile) return
+
+    try {
+      const updatedProfile = await executeApiCall(() => 
+        apiService.updateCompanyProfile(user.id, editProfile)
+      )
+      
+      if (updatedProfile && typeof updatedProfile === 'object') {
+        setProfile(updatedProfile as CompanyProfile)
+        setIsEditDialogOpen(false)
+        toast({
+          title: "Profile Updated",
+          description: "Your profile information has been saved successfully.",
+        })
+      }
+    } catch (err) {
+      console.error('Failed to update profile:', err)
+      toast({
+        title: "Error",
+        description: "Failed to update profile. Please try again.",
+        variant: "destructive",
+      })
+    }
+  }
+
+  const handleEditProfile = () => {
+    if (profile) {
+      setEditProfile({
+        name: profile.name || "",
+        first_name: profile.first_name || "",
+        last_name: profile.last_name || "",
+        description: profile.description || "",
+        website: profile.website || "",
+        logo_url: profile.logo_url || "",
+      })
+      setIsEditDialogOpen(true)
+    }
   }
 
   const handlePasswordChange = () => {
@@ -130,13 +216,46 @@ export default function AccountPage() {
     setIsDeleteDialogOpen(false)
   }
 
+  if (isLoading) {
+    return (
+      <ProtectedRoute>
+        <div className="flex flex-1 flex-col gap-6 p-4">
+          <div className="flex items-center justify-center h-64">
+            <Loader2 className="h-8 w-8 animate-spin" />
+          </div>
+        </div>
+      </ProtectedRoute>
+    )
+  }
+
+  if (!profile) {
+    return (
+      <ProtectedRoute>
+        <div className="flex flex-1 flex-col gap-6 p-4">
+          <div className="flex items-center justify-center h-64">
+            <div className="text-center">
+              <h2 className="text-xl font-semibold mb-2">Profile Not Found</h2>
+              <p className="text-muted-foreground">Unable to load your profile information.</p>
+            </div>
+          </div>
+        </div>
+      </ProtectedRoute>
+    )
+  }
+
   return (
     <ProtectedRoute>
     <div className="flex flex-1 flex-col gap-6 p-4">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Account Settings</h1>
-        <p className="text-muted-foreground">Manage your account information and preferences.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Account Settings</h1>
+          <p className="text-muted-foreground">Manage your account information and preferences.</p>
+        </div>
+        <Button onClick={handleEditProfile}>
+          <Edit className="mr-2 h-4 w-4" />
+          Edit Profile
+        </Button>
       </div>
 
       <div className="grid gap-6">
@@ -152,7 +271,7 @@ export default function AccountPage() {
           <CardContent className="space-y-6">
             <div className="flex items-center gap-4">
               <Avatar className="h-20 w-20">
-                <AvatarImage src={profile.avatar || "/placeholder.svg"} alt={profile.name} />
+                <AvatarImage src={profile.logo_url || "/placeholder.svg"} alt={profile.name} />
                 <AvatarFallback>
                   {profile.name
                     .split(" ")
@@ -160,70 +279,68 @@ export default function AccountPage() {
                     .join("")}
                 </AvatarFallback>
               </Avatar>
-              <Button variant="outline" size="sm">
-                <Camera className="mr-2 h-4 w-4" />
-                Change Avatar
-              </Button>
+              <div>
+                <h3 className="text-lg font-semibold">{profile.name}</h3>
+                <p className="text-sm text-muted-foreground">{profile.email}</p>
+                <Badge variant="outline" className="mt-1">
+                  {profile.subscription_plan || 'Free'} Plan
+                </Badge>
+              </div>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="name">Full Name</Label>
-                <Input
-                  id="name"
-                  value={profile.name}
-                  onChange={(e) => setProfile({ ...profile, name: e.target.value })}
-                />
+                <Label>Company Name</Label>
+                <p className="text-sm font-medium">{profile.name || 'Not set'}</p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="email">Email Address</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={profile.email}
-                  onChange={(e) => setProfile({ ...profile, email: e.target.value })}
-                />
+                <Label>Email Address</Label>
+                <p className="text-sm font-medium">{profile.email || 'Not set'}</p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="company">Company</Label>
-                <Input
-                  id="company"
-                  value={profile.company}
-                  onChange={(e) => setProfile({ ...profile, company: e.target.value })}
-                />
+                <Label>First Name</Label>
+                <p className="text-sm font-medium">{profile.first_name || 'Not set'}</p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="location">Location</Label>
-                <Input
-                  id="location"
-                  value={profile.location}
-                  onChange={(e) => setProfile({ ...profile, location: e.target.value })}
-                />
+                <Label>Last Name</Label>
+                <p className="text-sm font-medium">{profile.last_name || 'Not set'}</p>
               </div>
               <div className="space-y-2 md:col-span-2">
-                <Label htmlFor="website">Website</Label>
-                <Input
-                  id="website"
-                  type="url"
-                  value={profile.website}
-                  onChange={(e) => setProfile({ ...profile, website: e.target.value })}
-                />
+                <Label>Website</Label>
+                <p className="text-sm font-medium">
+                  {profile.website ? (
+                    <a href={profile.website} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                      {profile.website}
+                    </a>
+                  ) : (
+                    'Not set'
+                  )}
+                </p>
               </div>
               <div className="space-y-2 md:col-span-2">
-                <Label htmlFor="bio">Bio</Label>
-                <Textarea
-                  id="bio"
-                  placeholder="Tell us about yourself..."
-                  value={profile.bio}
-                  onChange={(e) => setProfile({ ...profile, bio: e.target.value })}
-                />
+                <Label>Description</Label>
+                <p className="text-sm text-muted-foreground">
+                  {profile.description || 'No description provided'}
+                </p>
               </div>
             </div>
 
-            <Button onClick={handleProfileUpdate}>
-              <Save className="mr-2 h-4 w-4" />
-              Save Changes
-            </Button>
+            <div className="pt-4 border-t">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Created</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {new Date(profile.created_at).toLocaleDateString()}
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Last Updated</Label>
+                  <p className="text-sm text-muted-foreground">
+                    {new Date(profile.updated_at).toLocaleDateString()}
+                  </p>
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -416,6 +533,91 @@ export default function AccountPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Edit Profile Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit Profile</DialogTitle>
+            <DialogDescription>
+              Update your company profile information.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="edit-name">Company Name</Label>
+                <Input
+                  id="edit-name"
+                  value={editProfile.name}
+                  onChange={(e) => setEditProfile({ ...editProfile, name: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-logo">Logo URL</Label>
+                <Input
+                  id="edit-logo"
+                  type="url"
+                  value={editProfile.logo_url}
+                  onChange={(e) => setEditProfile({ ...editProfile, logo_url: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-first-name">First Name</Label>
+                <Input
+                  id="edit-first-name"
+                  value={editProfile.first_name}
+                  onChange={(e) => setEditProfile({ ...editProfile, first_name: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-last-name">Last Name</Label>
+                <Input
+                  id="edit-last-name"
+                  value={editProfile.last_name}
+                  onChange={(e) => setEditProfile({ ...editProfile, last_name: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label htmlFor="edit-website">Website</Label>
+                <Input
+                  id="edit-website"
+                  type="url"
+                  value={editProfile.website}
+                  onChange={(e) => setEditProfile({ ...editProfile, website: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label htmlFor="edit-description">Description</Label>
+                <Textarea
+                  id="edit-description"
+                  placeholder="Tell us about your company..."
+                  value={editProfile.description}
+                  onChange={(e) => setEditProfile({ ...editProfile, description: e.target.value })}
+                />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleProfileUpdate} disabled={loading}>
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="mr-2 h-4 w-4" />
+                  Save Changes
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
     </ProtectedRoute>
   )
