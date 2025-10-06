@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -20,7 +20,7 @@ interface PaymentFailedData {
   transactionHash?: string
 }
 
-export default function PaymentFailedPage() {
+function PaymentFailedContent() {
   const [paymentData, setPaymentData] = useState<PaymentFailedData | null>(null)
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -278,6 +278,20 @@ export default function PaymentFailedPage() {
         </Card>
       </div>
     </ProtectedRoute>
+  )
+}
+
+export default function PaymentFailedPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex flex-1 flex-col gap-6 p-4 max-w-2xl mx-auto">
+        <div className="flex items-center justify-center h-64">
+          <Loader2 className="h-8 w-8 animate-spin" />
+        </div>
+      </div>
+    }>
+      <PaymentFailedContent />
+    </Suspense>
   )
 }
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -23,7 +23,7 @@ interface PartialPaymentData {
   requiredConfirmations?: number
 }
 
-export default function PartialPaymentPage() {
+function PartialPaymentContent() {
   const [paymentData, setPaymentData] = useState<PartialPaymentData | null>(null)
   const [isCheckingStatus, setIsCheckingStatus] = useState(false)
   const searchParams = useSearchParams()
@@ -333,6 +333,20 @@ export default function PartialPaymentPage() {
         </Card>
       </div>
     </ProtectedRoute>
+  )
+}
+
+export default function PartialPaymentPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex flex-1 flex-col gap-6 p-4 max-w-2xl mx-auto">
+        <div className="flex items-center justify-center h-64">
+          <Loader2 className="h-8 w-8 animate-spin" />
+        </div>
+      </div>
+    }>
+      <PartialPaymentContent />
+    </Suspense>
   )
 }
 
