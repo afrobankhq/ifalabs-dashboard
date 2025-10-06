@@ -34,12 +34,32 @@ import {
   PaymentStatusPoller
 } from "@/lib/payments"
 import { 
-  Plan, 
   PaymentDialogStep, 
   PaymentStatusType, 
   PaymentResponse,
   PaymentStatus
 } from "@/types/payments"
+
+// Plan interface from plan page
+interface Plan {
+  id: string
+  name: string
+  price: number | string
+  priceDescription?: string
+  description: string
+  features: {
+    dataAccess: string
+    apiRequests: string
+    rateLimit: string
+    requestCall: string
+    support: string
+  }
+  popular?: boolean
+  current?: boolean
+  billingFrequency?: 'monthly' | 'annual'
+  monthlyPrice?: number
+  annualPrice?: number
+}
 import QRCode from "qrcode"
 
 interface PaymentDialogProps {
@@ -156,7 +176,8 @@ export function PaymentDialog({ open, onOpenChange, selectedPlan, onPaymentSucce
       // Create payment intent
       const paymentIntent = await paymentApiService.createPaymentIntent(
         selectedPlan.id,
-        'crypto'
+        'crypto',
+        selectedPlan.billingFrequency || 'monthly'
       )
 
       // Create NOWPayments payment
@@ -167,7 +188,7 @@ export function PaymentDialog({ open, onOpenChange, selectedPlan, onPaymentSucce
         order_id: paymentIntent.order_id,
         order_description: `Subscription upgrade to ${selectedPlan.name}`,
         ipn_callback_url: `${window.location.origin}/api/payments/webhook`,
-        success_url: `${window.location.origin}/subscription/success?plan=${encodeURIComponent(selectedPlan.name)}`,
+        success_url: `${window.location.origin}/subscription/success?plan=${encodeURIComponent(selectedPlan.name)}&billing=${selectedPlan.billingFrequency || 'monthly'}`,
         cancel_url: `${window.location.origin}/subscription/plans`,
       }
 

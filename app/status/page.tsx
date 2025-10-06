@@ -17,61 +17,66 @@ import {
   Globe,
   Zap,
   BarChart3,
-  Loader2
+  Loader2,
+  RefreshCw
 } from "lucide-react"
-import { apiService, useApiCall } from "@/lib/api"
+import { apiService, useApiCall, SystemStatus, ServiceStatus, Incident, UptimeStats } from "@/lib/api"
 import { ProtectedRoute } from "@/components/protected-route"
 
 // Mock data - in production this would come from API endpoints
 const mockData = {
-  overallStatus: "operational", // operational, degraded, down
-  lastUpdated: new Date().toISOString(),
+  systemStatus: {
+    overallStatus: "operational",
+    lastUpdated: new Date().toISOString(),
+    services: 4,
+    uptime: "99.9%"
+  } as SystemStatus,
   services: [
     {
-      id: 1,
+      id: "api-gateway",
       name: "API Gateway",
       description: "Main API entry point",
-      status: "operational",
+      status: "operational" as const,
       uptime: 99.98,
       responseTime: 45,
-      icon: Server
+      icon: "server"
     },
     {
-      id: 2,
+      id: "database-cluster",
       name: "Database Cluster",
       description: "Primary data storage",
-      status: "operational",
+      status: "operational" as const,
       uptime: 99.95,
       responseTime: 12,
-      icon: Database
+      icon: "database"
     },
     {
-      id: 3,
+      id: "web-application",
       name: "Web Application",
       description: "Frontend application",
-      status: "operational",
+      status: "operational" as const,
       uptime: 99.99,
       responseTime: 89,
-      icon: Globe
+      icon: "globe"
     },
     {
-      id: 4,
+      id: "blockchain-watcher",
       name: "Blockchain Watcher",
       description: "Blockchain monitoring service",
-      status: "degraded",
+      status: "degraded" as const,
       uptime: 98.5,
       responseTime: 250,
-      icon: Zap
+      icon: "zap"
     }
-  ],
+  ] as ServiceStatus[],
   incidents: [
     {
       id: 1,
       service: "Blockchain Watcher",
       title: "Increased response times detected",
       description: "We're experiencing higher than normal response times from our blockchain monitoring service. Our team is investigating.",
-      status: "investigating", // investigating, identified, monitoring, resolved
-      severity: "medium",
+      status: "investigating" as const,
+      severity: "medium" as const,
       createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
       updatedAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(), // 30 minutes ago
       resolvedAt: null
@@ -81,19 +86,19 @@ const mockData = {
       service: "API Gateway",
       title: "Scheduled maintenance completed",
       description: "Routine maintenance has been completed successfully. All services are operating normally.",
-      status: "resolved",
-      severity: "low",
+      status: "resolved" as const,
+      severity: "low" as const,
       createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), // 24 hours ago
       updatedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), // 2 hours ago
       resolvedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
     }
-  ],
+  ] as Incident[],
   uptimeData: {
     last90Days: 99.87,
     last30Days: 99.92,
     last7Days: 99.98,
     last24Hours: 100.00
-  }
+  } as UptimeStats
 }
 
 // Mock uptime data for chart (simplified - in production use chart.js or recharts)
@@ -116,47 +121,115 @@ const generateUptimeData = () => {
 const uptimeChartData = generateUptimeData()
 
 function StatusPage() {
-  const [systemStatus, setSystemStatus] = useState<any>(null)
-  const [services, setServices] = useState<any[]>([])
-  const [incidents, setIncidents] = useState<any[]>([])
-  const [uptimeStats, setUptimeStats] = useState<any>(null)
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
+  const [services, setServices] = useState<ServiceStatus[]>([])
+  const [incidents, setIncidents] = useState<Incident[]>([])
+  const [uptimeStats, setUptimeStats] = useState<UptimeStats | null>(null)
   const [selectedTimeframe, setSelectedTimeframe] = useState("90d")
   const [email, setEmail] = useState("")
   const [slackWebhook, setSlackWebhook] = useState("")
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
+  const [isStreaming, setIsStreaming] = useState(false)
+  const [priceUpdates, setPriceUpdates] = useState<any[]>([])
   const { execute: executeApiCall, loading, error } = useApiCall()
 
   useEffect(() => {
     loadStatusData()
+    
+    // Auto-refresh every 30 seconds
+    const interval = setInterval(() => {
+      loadStatusData()
+      setLastRefresh(new Date())
+    }, 30000)
+
+    // Start price stream for real-time updates
+    startPriceStream()
+
+    return () => {
+      clearInterval(interval)
+      stopPriceStream()
+    }
   }, [])
+
+  const startPriceStream = () => {
+    try {
+      const eventSource = new EventSource('/api/prices/stream')
+      
+      eventSource.onopen = () => {
+        setIsStreaming(true)
+        console.log('Price stream connected')
+      }
+
+      eventSource.onmessage = (event) => {
+        try {
+          const priceData = JSON.parse(event.data)
+          setPriceUpdates(prev => [...prev.slice(-10), priceData]) // Keep last 10 updates
+          
+          // Update last refresh time when we get real-time data
+          setLastRefresh(new Date())
+        } catch (err) {
+          console.error('Error parsing price stream data:', err)
+        }
+      }
+
+      eventSource.onerror = (error) => {
+        console.error('Price stream error:', error)
+        setIsStreaming(false)
+        eventSource.close()
+      }
+
+      // Store event source for cleanup
+      ;(window as any).priceEventSource = eventSource
+    } catch (err) {
+      console.error('Failed to start price stream:', err)
+    }
+  }
+
+  const stopPriceStream = () => {
+    if ((window as any).priceEventSource) {
+      (window as any).priceEventSource.close()
+      setIsStreaming(false)
+    }
+  }
 
   const loadStatusData = async () => {
     try {
-      // Load system status
+      // Load system status from Oracle Engine
       const statusData = await executeApiCall(() => apiService.getSystemStatus())
       if (statusData) {
-        setSystemStatus(statusData)
+        setSystemStatus(statusData as SystemStatus)
       }
 
-      // Load services
+      // Load services from Oracle Engine
       const servicesData = await executeApiCall(() => apiService.getServiceStatus())
       if (servicesData) {
-        setServices(servicesData)
+        setServices(servicesData as ServiceStatus[])
       }
 
-      // Load incidents
+      // Load incidents from Oracle Engine
       const incidentsData = await executeApiCall(() => apiService.getIncidents())
       if (incidentsData) {
-        setIncidents(incidentsData)
+        setIncidents(incidentsData as Incident[])
       }
 
-      // Load uptime stats
+      // Load uptime stats from Oracle Engine
       const uptimeData = await executeApiCall(() => apiService.getUptimeStats())
       if (uptimeData) {
-        setUptimeStats(uptimeData)
+        setUptimeStats(uptimeData as UptimeStats)
       }
     } catch (err) {
-      console.error("Failed to load status data:", err)
+      console.error("Failed to load status data from Oracle Engine:", err)
+      // Fallback to mock data if API calls fail
+      setSystemStatus(mockData.systemStatus)
+      setServices(mockData.services)
+      setIncidents(mockData.incidents)
+      setUptimeStats(mockData.uptimeData)
     }
+  }
+
+  const handleManualRefresh = async () => {
+    await loadStatusData()
+    setLastRefresh(new Date())
   }
 
   const getStatusColor = (status: string) => {
@@ -219,7 +292,7 @@ function StatusPage() {
   }
 
   // Use API data or fallback to mock data
-  const statusData = systemStatus || mockData
+  const statusData = systemStatus || mockData.systemStatus
   const servicesData = services.length > 0 ? services : mockData.services
   const incidentsData = incidents.length > 0 ? incidents : mockData.incidents
   const uptimeData = uptimeStats || mockData.uptimeData
@@ -229,13 +302,36 @@ function StatusPage() {
       <div className="container mx-auto px-4 py-8 max-w-7xl">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-4xl font-bold text-foreground mb-2">System Status</h1>
-        <p className="text-muted-foreground">
-          Real-time monitoring of IFA Labs services and infrastructure
-        </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-4xl font-bold text-foreground mb-2">System Status</h1>
+            <p className="text-muted-foreground">
+              Real-time monitoring of IFA Labs Oracle Engine and infrastructure
+            </p>
+          </div>
+          <button
+            onClick={handleManualRefresh}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
         <div className="flex items-center gap-2 mt-2 text-sm text-muted-foreground">
           <Clock className="w-4 h-4" />
           Last updated: {formatDate(statusData.lastUpdated)}
+          {isStreaming && (
+            <span className="flex items-center gap-1 text-green-500 ml-4">
+              <Activity className="w-3 h-3 animate-pulse" />
+              Live
+            </span>
+          )}
+          {error && (
+            <span className="text-red-500 ml-4">
+              Error loading data: {error}
+            </span>
+          )}
         </div>
       </div>
 
@@ -305,31 +401,45 @@ function StatusPage() {
       <div className="bg-card border rounded-lg p-6 mb-8">
         <h2 className="text-2xl font-semibold mb-6">Services Status</h2>
         <div className="space-y-4">
-          {servicesData.map((service) => (
-            <div key={service.id} className="flex items-center justify-between p-4 border rounded-lg">
-              <div className="flex items-center gap-4">
-                <service.icon className="w-8 h-8 text-muted-foreground" />
-                <div>
-                  <h3 className="font-medium">{service.name}</h3>
-                  <p className="text-sm text-muted-foreground">{service.description}</p>
+          {servicesData.map((service) => {
+            // Handle icon rendering based on string identifier
+            const renderIcon = (iconName: string) => {
+              switch (iconName) {
+                case 'database': return <Database className="w-8 h-8 text-muted-foreground" />
+                case 'activity': return <Activity className="w-8 h-8 text-muted-foreground" />
+                case 'zap': return <Zap className="w-8 h-8 text-muted-foreground" />
+                case 'server': return <Server className="w-8 h-8 text-muted-foreground" />
+                case 'globe': return <Globe className="w-8 h-8 text-muted-foreground" />
+                default: return <Activity className="w-8 h-8 text-muted-foreground" />
+              }
+            }
+
+            return (
+              <div key={service.id} className="flex items-center justify-between p-4 border rounded-lg">
+                <div className="flex items-center gap-4">
+                  {renderIcon(service.icon)}
+                  <div>
+                    <h3 className="font-medium">{service.name}</h3>
+                    <p className="text-sm text-muted-foreground">{service.description}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-6">
+                  <div className="text-right">
+                    <div className="text-sm text-muted-foreground">Response Time</div>
+                    <div className="font-medium">{service.responseTime}ms</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm text-muted-foreground">Uptime</div>
+                    <div className="font-medium">{service.uptime}%</div>
+                  </div>
+                  <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(service.status)}`}>
+                    {getStatusIcon(service.status)}
+                    {service.status.charAt(0).toUpperCase() + service.status.slice(1)}
+                  </div>
                 </div>
               </div>
-              <div className="flex items-center gap-6">
-                <div className="text-right">
-                  <div className="text-sm text-muted-foreground">Response Time</div>
-                  <div className="font-medium">{service.responseTime}ms</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm text-muted-foreground">Uptime</div>
-                  <div className="font-medium">{service.uptime}%</div>
-                </div>
-                <div className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(service.status)}`}>
-                  {getStatusIcon(service.status)}
-                  {service.status.charAt(0).toUpperCase() + service.status.slice(1)}
-                </div>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </div>
 
@@ -375,6 +485,32 @@ function StatusPage() {
           </div>
         </div>
       </div>
+
+      {/* Real-time Price Updates */}
+      {priceUpdates.length > 0 && (
+        <div className="bg-card border rounded-lg p-6 mb-8">
+          <h2 className="text-2xl font-semibold mb-6 flex items-center gap-2">
+            <Activity className="w-6 h-6 text-green-500" />
+            Live Price Updates
+          </h2>
+          <div className="space-y-3 max-h-64 overflow-y-auto">
+            {priceUpdates.slice(-5).map((update, index) => (
+              <div key={index} className="flex items-center justify-between p-3 bg-muted rounded-lg">
+                <div>
+                  <div className="font-medium">{update.assetID || 'Unknown Asset'}</div>
+                  <div className="text-sm text-muted-foreground">
+                    {new Date(update.timestamp || update.price_timestamp).toLocaleTimeString()}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="font-bold">${update.price_value || update.value?.toFixed(2) || 'N/A'}</div>
+                  <div className="text-sm text-muted-foreground">{update.source || 'Oracle'}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Recent Incidents */}
       <div className="bg-card border rounded-lg p-6 mb-8">

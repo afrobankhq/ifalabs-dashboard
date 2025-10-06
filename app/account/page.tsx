@@ -45,7 +45,7 @@ interface UpdateProfileRequest {
   last_name: string
   description: string
   website: string
-  logo_url: string
+  logo_url?: string
 }
 
 interface NotificationSettings {
@@ -102,6 +102,72 @@ export default function AccountPage() {
     loadProfile()
   }, [user])
 
+  // Listen for profile updates from other pages
+  useEffect(() => {
+    const handleProfileUpdate = (event: CustomEvent) => {
+      console.log('Account - Profile updated event received:', event.detail)
+      if (event.detail?.profile) {
+        const profileResponse = event.detail.profile as CompanyProfile
+        setProfile(profileResponse)
+        // Update edit form with new data
+        setEditProfile({
+          name: profileResponse.name || "",
+          first_name: profileResponse.first_name || "",
+          last_name: profileResponse.last_name || "",
+          description: profileResponse.description || "",
+          website: profileResponse.website || "",
+          logo_url: profileResponse.logo_url || "",
+        })
+        console.log('Account - Profile updated from event')
+      }
+    }
+
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'user_profile' && event.newValue) {
+        console.log('Account - User profile updated in localStorage')
+        try {
+          const updatedProfile = JSON.parse(event.newValue) as CompanyProfile
+          setProfile(updatedProfile)
+          // Update edit form with new data
+          setEditProfile({
+            name: updatedProfile.name || "",
+            first_name: updatedProfile.first_name || "",
+            last_name: updatedProfile.last_name || "",
+            description: updatedProfile.description || "",
+            website: updatedProfile.website || "",
+            logo_url: updatedProfile.logo_url || "",
+          })
+          console.log('Account - Profile updated from localStorage')
+        } catch (err) {
+          console.error('Account - Failed to parse updated profile from localStorage:', err)
+        }
+      }
+    }
+
+    // Check for recent profile updates
+    const checkRecentProfileUpdate = () => {
+      const lastUpdate = localStorage.getItem('profile_updated_timestamp')
+      if (lastUpdate) {
+        const updateTime = parseInt(lastUpdate)
+        const now = Date.now()
+        if (now - updateTime < 30000) { // 30 seconds
+          console.log('Account - Recent profile update detected, reloading profile')
+          loadProfile()
+        }
+      }
+    }
+
+    checkRecentProfileUpdate()
+
+    window.addEventListener('profileUpdated', handleProfileUpdate as EventListener)
+    window.addEventListener('storage', handleStorageChange)
+
+    return () => {
+      window.removeEventListener('profileUpdated', handleProfileUpdate as EventListener)
+      window.removeEventListener('storage', handleStorageChange)
+    }
+  }, [user])
+
   const loadProfile = async () => {
     try {
       setIsLoading(true)
@@ -134,9 +200,32 @@ export default function AccountPage() {
   const handleProfileUpdate = async () => {
     if (!user || !profile) return
 
+    // Validate logo URL if provided
+    if (editProfile.logo_url && editProfile.logo_url.trim() !== '') {
+      try {
+        new URL(editProfile.logo_url)
+      } catch {
+        toast({
+          title: "Invalid Logo URL",
+          description: "Please enter a valid URL for the logo or leave it empty.",
+          variant: "destructive",
+        })
+        return
+      }
+    }
+
+    // Prepare the update payload, omitting empty logo_url
+    let updatePayload: UpdateProfileRequest
+    if (!editProfile.logo_url || editProfile.logo_url.trim() === '') {
+      const { logo_url, ...payloadWithoutLogo } = editProfile
+      updatePayload = payloadWithoutLogo
+    } else {
+      updatePayload = { ...editProfile }
+    }
+
     try {
       const updatedProfile = await executeApiCall(() => 
-        apiService.updateCompanyProfile(user.id, editProfile)
+        apiService.updateCompanyProfile(user.id, updatePayload)
       )
       
       if (updatedProfile && typeof updatedProfile === 'object') {

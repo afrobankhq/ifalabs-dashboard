@@ -103,7 +103,40 @@ class ApiService {
       }
 
       if (!response.ok) {
-        const message = (parsed && typeof parsed === 'object' && parsed.message) ? parsed.message : (typeof parsed === 'string' && parsed) || 'An error occurred'
+        // Log the full response for debugging
+        if (process.env.NODE_ENV !== 'production') {
+          try { 
+            console.error('[ApiService] Error response:', {
+              status: response.status,
+              statusText: response.statusText,
+              url,
+              parsed,
+              contentType
+            }) 
+          } catch {}
+        }
+        
+        // Extract error message from various possible response formats
+        let message = 'An error occurred'
+        
+        if (parsed) {
+          if (typeof parsed === 'string') {
+            message = parsed
+          } else if (typeof parsed === 'object') {
+            // Try different common error message fields
+            message = parsed.message || 
+                     parsed.error || 
+                     parsed.detail || 
+                     parsed.description || 
+                     parsed.msg ||
+                     (parsed.errors && Array.isArray(parsed.errors) ? parsed.errors.join(', ') : null) ||
+                     response.statusText ||
+                     'An error occurred'
+          }
+        } else {
+          message = response.statusText || 'An error occurred'
+        }
+        
         throw new ApiError(message, response.status, parsed)
       }
 
@@ -189,10 +222,51 @@ class ApiService {
 
   // Update subscription plan specifically
   async updateSubscriptionPlan(id: string, subscriptionPlan: string) {
-    return this.updateCompanyProfile(id, { 
-      name: '', // Required field, will be ignored by backend
-      subscription_plan: subscriptionPlan 
-    })
+    // Try the dedicated subscription endpoint first
+    const subscriptionEndpoint = `/api/dashboard/${encodeURIComponent(id)}/subscription`
+    
+    try {
+      // Try dedicated subscription endpoint
+      return await this.request<CompanyProfile>(subscriptionEndpoint, {
+        method: 'PUT',
+        body: JSON.stringify({ subscription_plan: subscriptionPlan }),
+      })
+    } catch (err) {
+      console.log('Dedicated subscription endpoint failed, trying profile update:', err)
+      // Fallback to profile update method
+      return this.updateCompanyProfile(id, { 
+        name: '', // Required field, will be ignored by backend
+        subscription_plan: subscriptionPlan 
+      })
+    }
+  }
+
+  // Refresh user profile from backend (useful after login to get latest data)
+  async refreshUserProfile(id: string) {
+    try {
+      const response = await this.getCompanyProfile(id)
+      if (response && response.data) {
+        // Update localStorage with fresh data from backend
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('user_profile', JSON.stringify(response.data))
+          localStorage.setItem('subscription_plan', response.data.subscription_plan || 'free')
+          
+          // Dispatch event to notify other components
+          window.dispatchEvent(new CustomEvent('profileRefreshed', { 
+            detail: { 
+              profile: response.data,
+              subscription_plan: response.data.subscription_plan,
+              timestamp: Date.now(),
+              source: 'backend_refresh'
+            } 
+          }))
+        }
+        return response
+      }
+    } catch (err) {
+      console.error('Failed to refresh user profile from backend:', err)
+      throw err
+    }
   }
 
   // Profile API keys
@@ -530,21 +604,46 @@ class ApiService {
     return this.request('/api/usage/stats')
   }
 
-  // Status endpoints
+  // Status endpoints - Oracle Engine integration
   async getSystemStatus() {
-    return this.request('/api/status')
+    // Try Oracle Engine status endpoint first, fallback to generic endpoint
+    const oracleEndpoint = process.env.NEXT_PUBLIC_ORACLE_STATUS_PATH || '/api/status'
+    const fallbackEndpoints = [
+      oracleEndpoint,
+      '/api/status',
+      '/api/health'
+    ]
+    return this.requestFallback(fallbackEndpoints)
   }
 
   async getServiceStatus() {
-    return this.request('/api/status/services')
+    const oracleEndpoint = process.env.NEXT_PUBLIC_ORACLE_SERVICES_PATH || '/api/status/services'
+    const fallbackEndpoints = [
+      oracleEndpoint,
+      '/api/status/services',
+      '/api/services'
+    ]
+    return this.requestFallback(fallbackEndpoints)
   }
 
   async getIncidents() {
-    return this.request('/api/status/incidents')
+    const oracleEndpoint = process.env.NEXT_PUBLIC_ORACLE_INCIDENTS_PATH || '/api/status/incidents'
+    const fallbackEndpoints = [
+      oracleEndpoint,
+      '/api/status/incidents',
+      '/api/incidents'
+    ]
+    return this.requestFallback(fallbackEndpoints)
   }
 
   async getUptimeStats() {
-    return this.request('/api/status/uptime')
+    const oracleEndpoint = process.env.NEXT_PUBLIC_ORACLE_UPTIME_PATH || '/api/status/uptime'
+    const fallbackEndpoints = [
+      oracleEndpoint,
+      '/api/status/uptime',
+      '/api/uptime'
+    ]
+    return this.requestFallback(fallbackEndpoints)
   }
 
   // Documentation endpoints
@@ -708,4 +807,41 @@ export type SubscriptionPlan = {
 
 export type SubscriptionPlansResponse = {
   plans: Record<string, SubscriptionPlan>
+}
+
+// Oracle Engine Status Types
+export type SystemStatus = {
+  overallStatus: string
+  lastUpdated: string
+  services: number
+  uptime: string
+}
+
+export type ServiceStatus = {
+  id: string
+  name: string
+  description: string
+  status: 'operational' | 'degraded' | 'down'
+  uptime: number
+  responseTime: number
+  icon: string
+}
+
+export type Incident = {
+  id: number
+  service: string
+  title: string
+  description: string
+  status: 'investigating' | 'identified' | 'monitoring' | 'resolved'
+  severity: 'critical' | 'high' | 'medium' | 'low'
+  createdAt: string
+  updatedAt: string
+  resolvedAt?: string | null
+}
+
+export type UptimeStats = {
+  last90Days: number
+  last30Days: number
+  last7Days: number
+  last24Hours: number
 }

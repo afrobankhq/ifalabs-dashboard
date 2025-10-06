@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 export async function POST(request: NextRequest) {
   try {
-    const { planId, paymentMethod } = await request.json();
+    const { planId, paymentMethod, billingFrequency } = await request.json();
 
     if (!planId || !paymentMethod) {
       return NextResponse.json(
@@ -13,8 +13,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Generate unique order ID
-    const orderId = `sub_${planId}_${uuidv4()}`;
+    // Generate unique order ID with billing frequency
+    const orderId = `sub_${planId}_${billingFrequency || 'monthly'}_${uuidv4()}`;
 
     // Store payment intent in your database or cache
     // This is where you'd typically save the payment intent to your database
@@ -22,6 +22,7 @@ export async function POST(request: NextRequest) {
       order_id: orderId,
       plan_id: planId,
       payment_method: paymentMethod,
+      billing_frequency: billingFrequency || 'monthly',
       status: 'pending',
       created_at: new Date().toISOString(),
     };

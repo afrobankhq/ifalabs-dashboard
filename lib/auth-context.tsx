@@ -35,29 +35,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const initializeAuth = async () => {
     try {
       setIsLoading(true)
+      console.log('[AuthContext] initializeAuth: starting')
       
-      // Check if user is already logged in
-      const currentUser = authService.getCurrentUser()
-      if (currentUser && authService.isAuthenticated()) {
-        // If verify path isn't configured, trust local token
-        const hasVerify = !!process.env.NEXT_PUBLIC_AUTH_VERIFY_PATH
-        let isValid = true
-        if (hasVerify) {
-          isValid = await authService.verifyToken()
-        }
-        if (isValid) setUser(currentUser)
-        else {
-          console.warn('Token verification failed; preserving session')
+      // Check if user is authenticated by verifying token and fetching user data
+      if (authService.isAuthenticated()) {
+        console.log('[AuthContext] initializeAuth: user is authenticated, verifying token')
+        const isValid = await authService.verifyToken()
+        if (isValid) {
+          console.log('[AuthContext] initializeAuth: token is valid, fetching user data')
+          // Fetch current user from API
+          const currentUser = await authService.getCurrentUser()
+          console.log('[AuthContext] initializeAuth: got user data', currentUser)
           setUser(currentUser)
+        } else {
+          console.warn('[AuthContext] initializeAuth: token verification failed; clearing session')
+          setUser(null)
         }
       } else {
+        console.log('[AuthContext] initializeAuth: user is not authenticated')
         setUser(null)
       }
     } catch (error) {
-      console.error('Auth initialization error:', error)
+      console.error('[AuthContext] initializeAuth: error', error)
       setUser(null)
     } finally {
       setIsLoading(false)
+      console.log('[AuthContext] initializeAuth: completed')
     }
   }
 
@@ -105,14 +108,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const refreshAuth = async () => {
     try {
-      const currentUser = authService.getCurrentUser()
-      if (currentUser && authService.isAuthenticated()) {
+      if (authService.isAuthenticated()) {
         const isValid = await authService.verifyToken()
         if (isValid) {
+          // Fetch current user from API
+          const currentUser = await authService.getCurrentUser()
           setUser(currentUser)
         } else {
-          console.warn('Token verification failed during refresh; preserving session')
-          setUser(currentUser)
+          console.warn('Token verification failed during refresh; clearing session')
+          setUser(null)
         }
       } else {
         setUser(null)
