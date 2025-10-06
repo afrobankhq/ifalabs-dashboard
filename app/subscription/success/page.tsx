@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -21,7 +21,7 @@ interface PaymentSuccessData {
   transactionHash?: string
 }
 
-export default function PaymentSuccessPage() {
+function PaymentSuccessContent() {
   const [paymentData, setPaymentData] = useState<PaymentSuccessData | null>(null)
   const [isUpdatingSubscription, setIsUpdatingSubscription] = useState(false)
   const [subscriptionUpdated, setSubscriptionUpdated] = useState(false)
@@ -407,5 +407,20 @@ export default function PaymentSuccessPage() {
         </div>
       </div>
     </ProtectedRoute>
+  )
+}
+
+export default function PaymentSuccessPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
+          <p>Loading payment information...</p>
+        </div>
+      </div>
+    }>
+      <PaymentSuccessContent />
+    </Suspense>
   )
 }
