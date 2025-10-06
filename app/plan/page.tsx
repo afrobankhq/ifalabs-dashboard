@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Check, Crown, Zap, Shield, Users, BarChart3, ArrowRight, Star, Rocket, Building, Loader2, CreditCard } from "lucide-react"
+import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/use-toast"
 import { apiService, useApiCall } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
@@ -35,6 +36,9 @@ interface Plan {
   }
   popular?: boolean
   current?: boolean
+  billingFrequency?: 'monthly' | 'annual'
+  monthlyPrice?: number
+  annualPrice?: number
 }
 
 const defaultPlans: Plan[] = [
@@ -51,12 +55,15 @@ const defaultPlans: Plan[] = [
       requestCall: "$0.00000",
       support: "Email & Community"
     },
+    billingFrequency: 'monthly',
+    monthlyPrice: 0,
+    annualPrice: 0,
   },
   {
     id: "developer",
     name: "Developer Tier",
-    price: 50,
-    priceDescription: "$50",
+    price: 500, // Annual price (10 months free)
+    priceDescription: "$500",
     description: "Great for developers building applications",
     features: {
       dataAccess: "All feeds",
@@ -66,12 +73,15 @@ const defaultPlans: Plan[] = [
       support: "24/7 support"
     },
     popular: true,
+    billingFrequency: 'annual',
+    monthlyPrice: 50,
+    annualPrice: 500,
   },
   {
     id: "professional",
     name: "Professional Tier",
-    price: 100,
-    priceDescription: "$100",
+    price: 1000, // Annual price (2 months free)
+    priceDescription: "$1,000",
     description: "For growing businesses with higher demands",
     features: {
       dataAccess: "All feeds + Historical data",
@@ -80,6 +90,9 @@ const defaultPlans: Plan[] = [
       requestCall: "$0.0002",
       support: "24/7 support"
     },
+    billingFrequency: 'annual',
+    monthlyPrice: 100,
+    annualPrice: 1000,
   },
   {
     id: "enterprise",
@@ -94,8 +107,40 @@ const defaultPlans: Plan[] = [
       requestCall: "Custom",
       support: "24/7 support + dedicated engineer"
     },
+    billingFrequency: 'annual',
+    monthlyPrice: -1,
+    annualPrice: -1,
   },
 ]
+
+// Helper function to calculate next billing date
+const calculateNextBillingDate = (billingFrequency: 'monthly' | 'annual', subscriptionStartDate?: string): string => {
+  const startDate = subscriptionStartDate ? new Date(subscriptionStartDate) : new Date()
+  const nextBillingDate = new Date(startDate)
+  
+  // Calculate next billing date based on billing frequency
+  if (billingFrequency === 'annual') {
+    nextBillingDate.setFullYear(nextBillingDate.getFullYear() + 1)
+  } else {
+    nextBillingDate.setMonth(nextBillingDate.getMonth() + 1)
+  }
+  
+  // If the calculated date is in the past, add another billing period
+  const now = new Date()
+  while (nextBillingDate <= now) {
+    if (billingFrequency === 'annual') {
+      nextBillingDate.setFullYear(nextBillingDate.getFullYear() + 1)
+    } else {
+      nextBillingDate.setMonth(nextBillingDate.getMonth() + 1)
+    }
+  }
+  
+  return nextBillingDate.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+}
 
 export default function PlanPage() {
   const [plans, setPlans] = useState<Plan[]>(defaultPlans)
@@ -105,6 +150,7 @@ export default function PlanPage() {
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null)
   const [paymentMethod, setPaymentMethod] = useState<'crypto' | 'traditional'>('crypto')
+  const [billingFrequency, setBillingFrequency] = useState<'monthly' | 'annual'>('annual')
   const { toast } = useToast()
   const { execute: executeApiCall, loading, error } = useApiCall()
   const { user } = useAuth()
@@ -113,6 +159,64 @@ export default function PlanPage() {
     if (!user) return
     loadPlanData()
   }, [user])
+
+  // Listen for profile updates from payment success page
+  useEffect(() => {
+    const handleProfileUpdate = (event: CustomEvent) => {
+      console.log('Profile updated event received in plan page:', event.detail)
+      console.log('New subscription plan from event:', event.detail?.subscription_plan)
+      // Reload plan data when profile is updated
+      loadPlanData()
+    }
+
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'user_profile' && event.newValue) {
+        console.log('User profile updated in localStorage, reloading plan data')
+        try {
+          const updatedProfile = JSON.parse(event.newValue)
+          console.log('Updated profile from localStorage:', updatedProfile)
+          loadPlanData()
+        } catch (err) {
+          console.error('Failed to parse updated profile from localStorage:', err)
+        }
+      } else if (event.key === 'profile_updated_timestamp') {
+        console.log('Profile update timestamp changed, reloading plan data')
+        loadPlanData()
+      }
+    }
+
+    // Check if profile was updated recently (within last 30 seconds)
+    const checkRecentProfileUpdate = () => {
+      const lastUpdate = localStorage.getItem('profile_updated_timestamp')
+      const directPlan = localStorage.getItem('subscription_plan')
+      
+      if (lastUpdate) {
+        const updateTime = parseInt(lastUpdate)
+        const now = Date.now()
+        if (now - updateTime < 30000) { // 30 seconds
+          console.log('Recent profile update detected, reloading plan data')
+          loadPlanData()
+        }
+      }
+      
+      // Also check for direct subscription plan update
+      if (directPlan && directPlan !== 'free') {
+        console.log('Direct subscription plan found in localStorage:', directPlan)
+        loadPlanData()
+      }
+    }
+
+    // Check on mount
+    checkRecentProfileUpdate()
+
+    window.addEventListener('profileUpdated', handleProfileUpdate as EventListener)
+    window.addEventListener('storage', handleStorageChange)
+    
+    return () => {
+      window.removeEventListener('profileUpdated', handleProfileUpdate as EventListener)
+      window.removeEventListener('storage', handleStorageChange)
+    }
+  }, [])
 
   const loadPlanData = async () => {
     try {
@@ -124,23 +228,57 @@ export default function PlanPage() {
 
       // Load current plan from company profile
       let resolvedPlanId: string | null = null
+      let profile: any = null
+      
+      // First, check for direct subscription plan in localStorage
+      const directPlan = localStorage.getItem('subscription_plan')
+      if (directPlan && directPlan !== 'free') {
+        console.log('Plan page - Using direct subscription plan from localStorage:', directPlan)
+        resolvedPlanId = directPlan.toLowerCase()
+      }
+      
       try {
-        const profile = user ? await executeApiCall(() => apiService.getCompanyProfile(user.id)) : null
+        profile = user ? await executeApiCall(() => apiService.getCompanyProfile(user.id)) : null
+        console.log('Plan page - Profile loaded from API:', profile)
+        
         if (profile && typeof profile === 'object') {
-          const planId = String((profile as any).subscription_plan || '').toLowerCase()
-          resolvedPlanId = planId || null
+          const subscriptionPlan = profile.subscription_plan || profile.plan || profile.subscription
+          const planId = String(subscriptionPlan || '').toLowerCase()
+          resolvedPlanId = planId || resolvedPlanId
+          console.log('Plan page - Resolved plan ID from API profile:', resolvedPlanId, 'from subscription plan:', subscriptionPlan)
         }
       } catch (e) {
-        // ignore; will fallback below
+        console.error('Plan page - Failed to load profile from API:', e)
+        // Try to get profile from localStorage as fallback
+        try {
+          const storedProfile = localStorage.getItem('user_profile')
+          if (storedProfile) {
+            profile = JSON.parse(storedProfile)
+            console.log('Plan page - Profile loaded from localStorage:', profile)
+            if (profile && typeof profile === 'object') {
+              const subscriptionPlan = profile.subscription_plan || profile.plan || profile.subscription
+              const planId = String(subscriptionPlan || '').toLowerCase()
+              resolvedPlanId = planId || resolvedPlanId
+              console.log('Plan page - Resolved plan ID from localStorage profile:', resolvedPlanId, 'from subscription plan:', subscriptionPlan)
+            }
+          }
+        } catch (localError) {
+          console.error('Plan page - Failed to load profile from localStorage:', localError)
+        }
       }
 
       const matchedPlan = resolvedPlanId
         ? defaultPlans.find(p => p.id === resolvedPlanId) || defaultPlans.find(p => p.id === 'free')
         : null
 
+      console.log('Plan page - Matched plan:', matchedPlan)
+      console.log('Plan page - Is free tier:', matchedPlan?.id === 'free')
+
       if (matchedPlan) {
-        setCurrentPlan({ ...matchedPlan, current: true })
+        const updatedPlan = { ...matchedPlan, current: true }
+        setCurrentPlan(updatedPlan)
         setPlans(prevPlans => prevPlans.map(plan => ({ ...plan, current: plan.id === matchedPlan!.id })))
+        console.log('Plan page - Set current plan to:', matchedPlan.name)
       }
 
       // Load usage stats
@@ -153,7 +291,8 @@ export default function PlanPage() {
       // Use default plans if API fails
       const freePlan = defaultPlans.find(p => p.id === 'free')
       if (freePlan) {
-        setCurrentPlan({ ...freePlan, current: true })
+        const updatedFreePlan = { ...freePlan, current: true }
+        setCurrentPlan(updatedFreePlan)
         setPlans(defaultPlans.map(plan => ({
           ...plan,
           current: plan.id === 'free'
@@ -262,6 +401,40 @@ export default function PlanPage() {
     }
   }
 
+  const updatePlanPricing = (plans: Plan[], frequency: 'monthly' | 'annual') => {
+    return plans.map(plan => {
+      if (plan.id === 'free') {
+        return {
+          ...plan,
+          price: 0,
+          priceDescription: "$0",
+          billingFrequency: frequency
+        }
+      }
+      
+      if (plan.id === 'enterprise') {
+        return {
+          ...plan,
+          price: -1,
+          priceDescription: "Custom",
+          billingFrequency: frequency
+        }
+      }
+
+      const monthlyPrice = plan.monthlyPrice ?? 0
+      const annualPrice = plan.annualPrice ?? 0
+      const price = frequency === 'monthly' ? monthlyPrice : annualPrice
+      const priceDescription = frequency === 'monthly' ? `$${monthlyPrice}` : `$${annualPrice}`
+      
+      return {
+        ...plan,
+        price,
+        priceDescription,
+        billingFrequency: frequency
+      }
+    })
+  }
+
   if (loading && plans.length === 0) {
     return (
       <div className="flex flex-1 flex-col gap-6 p-4">
@@ -279,6 +452,31 @@ export default function PlanPage() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Subscription Plans</h1>
         <p className="text-muted-foreground">Choose the perfect plan for your needs and scale as you grow. Pay with cryptocurrency for instant activation.</p>
+        
+        {/* Billing Frequency Toggle */}
+        <div className="flex items-center justify-center mt-6">
+          <div className="flex items-center space-x-4 bg-muted p-1 rounded-lg">
+            <span className={`text-sm font-medium ${billingFrequency === 'monthly' ? 'text-foreground' : 'text-muted-foreground'}`}>
+              Monthly
+            </span>
+            <Switch
+              checked={billingFrequency === 'annual'}
+              onCheckedChange={(checked) => {
+                const newFrequency = checked ? 'annual' : 'monthly'
+                setBillingFrequency(newFrequency)
+                setPlans(prevPlans => updatePlanPricing(prevPlans, newFrequency))
+              }}
+            />
+            <span className={`text-sm font-medium ${billingFrequency === 'annual' ? 'text-foreground' : 'text-muted-foreground'}`}>
+              Annual
+            </span>
+            {billingFrequency === 'annual' && (
+              <Badge variant="secondary" className="ml-2">
+                Save up to 17%
+              </Badge>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Current Plan & Usage */}
@@ -300,20 +498,28 @@ export default function PlanPage() {
                 </div>
                 <div className="text-right">
                   <div className="text-2xl font-bold">{currentPlan.priceDescription}</div>
-                  <div className="text-sm text-muted-foreground">per month</div>
+                  <div className="text-sm text-muted-foreground">
+                    {currentPlan.price === 0 ? 'Free Forever' : 
+                     currentPlan.billingFrequency === 'annual' ? 'per year' : 'per month'}
+                  </div>
                 </div>
               </div>
               <div className="space-y-2">
                 <div className="flex justify-between text-sm">
                   <span>Next billing date</span>
                   <span className="font-medium">
-                    {currentPlan.price === 0 ? 'N/A (Free Plan)' : 'September 25, 2025'}
+                    {currentPlan.price === 0 ? 'N/A (Free Plan)' : 
+                     calculateNextBillingDate(
+                       currentPlan.billingFrequency || 'monthly',
+                       localStorage.getItem('subscription_start_date') || undefined
+                     )}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span>Billing cycle</span>
                   <span className="font-medium">
-                    {currentPlan.price === 0 ? 'N/A' : 'Monthly'}
+                    {currentPlan.price === 0 ? 'N/A' : 
+                     currentPlan.billingFrequency === 'annual' ? 'Annual' : 'Monthly'}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
@@ -394,12 +600,22 @@ export default function PlanPage() {
                   <div className="text-3xl font-bold">
                     {plan.priceDescription}
                     {Number(plan.price) !== -1 && Number(plan.price) !== 0 && (
-                      <span className="text-lg font-normal text-muted-foreground">/month</span>
+                      <span className="text-lg font-normal text-muted-foreground">
+                        /{plan.billingFrequency === 'annual' ? 'year' : 'month'}
+                      </span>
                     )}
                   </div>
                   {Number(plan.price) > 0 && Number(plan.price) !== -1 && (
                     <div className="text-xs text-muted-foreground mt-1">
-                      Pay with crypto for instant activation
+                      {plan.billingFrequency === 'annual' && plan.monthlyPrice && plan.annualPrice ? (
+                        <>
+                          ${Math.round(plan.annualPrice / 12)}/month billed annually
+                          <br />
+                          Save ${(plan.monthlyPrice * 12) - plan.annualPrice}/year
+                        </>
+                      ) : (
+                        'Pay with crypto for instant activation'
+                      )}
                     </div>
                   )}
                 </div>
@@ -451,7 +667,7 @@ export default function PlanPage() {
             <DialogTitle>Choose Payment Method</DialogTitle>
             <DialogDescription>
               {selectedPlan &&
-                `Select how you'd like to pay for ${selectedPlan.name} (${selectedPlan.priceDescription}/month)`}
+                `Select how you'd like to pay for ${selectedPlan.name} (${selectedPlan.priceDescription}/${selectedPlan.billingFrequency === 'annual' ? 'year' : 'month'})`}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4">

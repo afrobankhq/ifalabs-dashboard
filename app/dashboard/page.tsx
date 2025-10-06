@@ -15,15 +15,38 @@ export default function DashboardPage() {
   const [currentPlan, setCurrentPlan] = useState<string>('free')
   const { user } = useAuth()
 
+
   useEffect(() => {
     const load = async () => {
       try {
         const currentUser = user ?? authService.getCurrentUser()
         if (!currentUser?.id) return
+        
         const prof = await apiService.getCompanyProfile(currentUser.id)
-        setProfile(prof.data)
-        const planId = (prof.data?.subscription_plan || '').toLowerCase().trim()
-        setCurrentPlan(planId || 'free')
+        
+        if (prof?.data) {
+          setProfile(prof.data)
+          const planId = (prof.data.subscription_plan || '').toLowerCase().trim()
+          setCurrentPlan(planId || 'free')
+        } else {
+          // Fallback to localStorage if API fails
+          const storedProfile = localStorage.getItem('user_profile')
+          const storedPlan = localStorage.getItem('subscription_plan')
+          
+          if (storedProfile) {
+            try {
+              const parsedProfile = JSON.parse(storedProfile)
+              setProfile(parsedProfile)
+            } catch (e) {
+              console.error('Failed to parse stored profile:', e)
+            }
+          }
+          
+          if (storedPlan) {
+            const planId = storedPlan.toLowerCase().trim()
+            setCurrentPlan(planId || 'free')
+          }
+        }
 
         const keys = await apiService.getProfileApiKeys(currentUser.id)
         setApiKeys(keys.data)
@@ -40,6 +63,7 @@ export default function DashboardPage() {
     }
     load()
   }, [user])
+
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-4">
@@ -109,6 +133,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
     </div>
   )
 }

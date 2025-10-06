@@ -97,6 +97,9 @@ export interface PaymentRequest {
     };
     popular?: boolean;
     current?: boolean;
+    billingFrequency?: 'monthly' | 'annual';
+    monthlyPrice?: number;
+    annualPrice?: number;
   }
   
   export type PaymentDialogStep = 'select' | 'payment' | 'confirmation';

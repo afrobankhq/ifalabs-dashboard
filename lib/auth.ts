@@ -45,18 +45,18 @@ interface LoginApiResponse {
 }
 
 class AuthService {
-  private readonly TOKEN_KEY = 'auth_token'
-  private readonly REFRESH_TOKEN_KEY = 'refresh_token'
-  private readonly USER_KEY = 'user_data'
-
   private discoveredAuthPaths: { login?: string; register?: string; logout?: string; refresh?: string; verify?: string } | null = null
+  private currentUserId: string | null = null
 
   private async fetchJsonWithFallback<T>(paths: string[], init: RequestInit): Promise<{ data: T; response: Response; url: string }> {
     const attempts: string[] = []
+    console.log('[Auth] API_BASE_URL:', API_BASE_URL)
     for (const path of paths) {
       const url = `${API_BASE_URL}${path}`
+      console.log('[Auth] Attempting URL:', url)
       const resp = await fetch(url, init)
       const contentType = resp.headers.get('content-type') || ''
+      console.log('[Auth] Response status:', resp.status, 'Content-Type:', contentType)
       if (resp.ok && contentType.includes('application/json')) {
         const data = await resp.json() as T
         return { data, response: resp, url }
@@ -64,9 +64,11 @@ class AuthService {
       try {
         if (contentType.includes('application/json')) {
           const errJson = await resp.json()
+          console.log('[Auth] Error response:', errJson)
           attempts.push(`${resp.status} ${resp.statusText} at ${url} (${errJson?.message || 'json error'})`)
         } else {
           const errText = await resp.text()
+          console.log('[Auth] Error text:', errText)
           attempts.push(`${resp.status} ${resp.statusText} at ${url} (non-JSON: ${errText.slice(0, 80)})`)
         }
       } catch {
@@ -191,6 +193,7 @@ class AuthService {
       // Store tokens and user data
       this.setToken(mapped.token)
       this.setUser(mapped.user)
+      this.currentUserId = data.id
 
       // Check and assign default subscription plan if needed
       await this.ensureDefaultSubscriptionPlan(data.id, data.access_token)
@@ -206,36 +209,77 @@ class AuthService {
     try {
       const envRegister = process.env.NEXT_PUBLIC_AUTH_REGISTER_PATH
       // Build payload per Swagger schema
-      const signupPayload = {
+      // Split name into first and last name if not provided separately
+      const nameParts = (signupData.firstName && signupData.lastName) 
+        ? [signupData.firstName, signupData.lastName]
+        : signupData.name.split(' ')
+      
+      const firstName = nameParts[0] || 'User'
+      const lastName = nameParts.slice(1).join(' ') || 'Account'
+      
+      const signupPayload: any = {
         description: signupData.description ?? '',
         email: signupData.email,
-        first_name: signupData.firstName ?? '',
-        last_name: signupData.lastName ?? '',
+        first_name: firstName,
+        last_name: lastName,
         name: signupData.name,
         password: signupData.password,
-        website: (signupData.website && signupData.website.trim()) ? signupData.website.trim() : 'N/A',
+      }
+      
+      // Only include website if it's a valid URL
+      if (signupData.website && signupData.website.trim() && signupData.website.trim() !== 'N/A') {
+        signupPayload.website = signupData.website.trim()
       }
 
       if (!envRegister) {
         throw new Error('Auth register path not configured. Set NEXT_PUBLIC_AUTH_REGISTER_PATH.')
       }
-      const { data } = await this.fetchJsonWithFallback<AuthResponse>([envRegister], {
+      
+      // Call signup endpoint
+      console.log('[Auth] Signup URL:', `${API_BASE_URL}${envRegister}`)
+      console.log('[Auth] Signup payload:', JSON.stringify(signupPayload, null, 2))
+      const { data: signupResponse } = await this.fetchJsonWithFallback<{id: string, message: string}>([envRegister], {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(signupPayload),
       })
       
-      // Store tokens and user data
-      this.setToken(data.token)
-      if (data.refreshToken) {
-        this.setRefreshToken(data.refreshToken)
+      // After successful signup, automatically login to get user data and token
+      const loginCredentials = {
+        email: signupData.email,
+        password: signupData.password
       }
-      this.setUser(data.user)
+      
+      const envLogin = process.env.NEXT_PUBLIC_AUTH_LOGIN_PATH
+      if (!envLogin) {
+        throw new Error('Auth login path not configured. Set NEXT_PUBLIC_AUTH_LOGIN_PATH.')
+      }
+      
+      const { data: loginData } = await this.fetchJsonWithFallback<LoginApiResponse>([envLogin], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loginCredentials),
+      })
+      
+      // Map backend response to app AuthResponse
+      const mapped: AuthResponse = {
+        token: loginData.access_token,
+        user: {
+          id: loginData.id,
+          name: loginData.name,
+          email: loginData.email,
+        },
+      }
+      
+      // Store tokens and user data
+      this.setToken(mapped.token)
+      this.setUser(mapped.user)
+      this.currentUserId = mapped.user.id
 
       // Check and assign default subscription plan for new user
-      await this.ensureDefaultSubscriptionPlan(data.user.id, data.token)
+      await this.ensureDefaultSubscriptionPlan(mapped.user.id, mapped.token)
 
-      return data
+      return mapped
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Registration failed')
     }
@@ -301,9 +345,8 @@ class AuthService {
         return false
       }
       
-      // Get current user for ID substitution
-      const currentUser = this.getCurrentUser()
-      const userId = currentUser?.id || ''
+      // Get user ID from token for ID substitution
+      const userId = this.currentUserId || this.extractUserIdFromToken(token) || ''
       
       // Try environment variable first, then fallback to common auth verification endpoints
       const envVerify = process.env.NEXT_PUBLIC_AUTH_VERIFY_PATH
@@ -354,20 +397,70 @@ class AuthService {
     }
   }
 
-  // Get current user
-  getCurrentUser(): AuthUser | null {
-    if (typeof window === 'undefined') return null
-    
-    const userData = localStorage.getItem(this.USER_KEY)
-    if (!userData || userData === 'undefined' || userData === 'null') {
+  // Get current user from API
+  async getCurrentUser(): Promise<AuthUser | null> {
+    try {
+      const token = this.getToken()
+      if (!token) {
+        console.log('[Auth] getCurrentUser: no token')
+        return null
+      }
+
+      // Try to get user ID from stored value first, then from token
+      let userId = this.currentUserId
+      if (!userId) {
+        console.log('[Auth] getCurrentUser: extracting user ID from token')
+        userId = this.extractUserIdFromToken(token)
+        console.log('[Auth] getCurrentUser: extracted user ID', userId)
+      } else {
+        console.log('[Auth] getCurrentUser: using stored user ID', userId)
+      }
+
+      if (!userId) {
+        console.log('[Auth] getCurrentUser: no user ID available')
+        return null
+      }
+
+      // Get user profile from API using the user ID
+      console.log('[Auth] getCurrentUser: fetching profile from API', userId)
+      const { apiService } = await import('./api')
+      const profileResponse = await apiService.getCompanyProfile(userId)
+      const profile = profileResponse.data
+      
+      if (!profile) {
+        console.log('[Auth] getCurrentUser: no profile data received')
+        return null
+      }
+
+      // Store the user ID for future use
+      this.currentUserId = profile.id
+      console.log('[Auth] getCurrentUser: success', { id: profile.id, name: profile.name, email: profile.email })
+
+      return {
+        id: profile.id,
+        name: profile.name,
+        email: profile.email,
+      }
+    } catch (error) {
+      console.error('[Auth] getCurrentUser: error', error)
       return null
     }
+  }
+
+  // Extract user ID from JWT token
+  private extractUserIdFromToken(token: string): string | null {
     try {
-      return JSON.parse(userData)
+      // JWT tokens have 3 parts separated by dots: header.payload.signature
+      const parts = token.split('.')
+      if (parts.length !== 3) return null
+
+      // Decode the payload (second part)
+      const payload = JSON.parse(atob(parts[1]))
+      
+      // Look for user ID in common JWT claims
+      return payload.sub || payload.user_id || payload.id || payload.userId || null
     } catch (error) {
-      // Clean up corrupted value and return null
-      try { localStorage.removeItem(this.USER_KEY) } catch {}
-      console.error('Error parsing user data:', error)
+      console.error('Error extracting user ID from token:', error)
       return null
     }
   }
@@ -382,10 +475,9 @@ class AuthService {
     return tokenService.getToken()
   }
 
-  // Get stored refresh token
+  // Get stored refresh token (not used in API-only approach)
   getRefreshToken(): string | null {
-    if (typeof window === 'undefined') return null
-    return localStorage.getItem(this.REFRESH_TOKEN_KEY)
+    return null
   }
 
   // Set token
@@ -393,21 +485,14 @@ class AuthService {
     tokenService.setToken(token)
   }
 
-  // Set refresh token
+  // Set refresh token (not used in API-only approach)
   private setRefreshToken(refreshToken: string): void {
-    if (typeof window === 'undefined') return
-    localStorage.setItem(this.REFRESH_TOKEN_KEY, refreshToken)
+    // No-op in API-only approach
   }
 
-  // Set user data
+  // Set user data (not used in API-only approach)
   private setUser(user: AuthUser): void {
-    if (typeof window === 'undefined') return
-    try {
-      if (!user || typeof user !== 'object') return
-      localStorage.setItem(this.USER_KEY, JSON.stringify(user))
-    } catch {
-      // ignore storage errors
-    }
+    // No-op in API-only approach - user data is fetched from API
   }
 
   // Ensure user has a default subscription plan
@@ -439,10 +524,8 @@ class AuthService {
 
   // Clear all auth data
   private clearAuth(): void {
-    if (typeof window === 'undefined') return
     tokenService.removeToken()
-    localStorage.removeItem(this.REFRESH_TOKEN_KEY)
-    localStorage.removeItem(this.USER_KEY)
+    this.currentUserId = null
   }
 }
 

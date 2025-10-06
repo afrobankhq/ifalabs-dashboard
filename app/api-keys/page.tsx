@@ -120,7 +120,24 @@ export default function ApiKeysPage() {
       await refreshKeys()
     } catch (err) {
       console.error('[API Keys] create:error', err)
-      toast({ title: "Error", description: "Failed to create API key.", variant: "destructive" })
+      
+      let errorMessage = "Failed to create API key."
+      
+      if (err instanceof ApiError) {
+        if (err.status === 500 && err.message.includes('crypto/aes: invalid key size')) {
+          errorMessage = "Server configuration error. Please contact support."
+        } else if (err.status === 500) {
+          errorMessage = "Server error occurred. Please try again later."
+        } else if (err.status === 404) {
+          errorMessage = "API endpoint not found. Please check your configuration."
+        } else {
+          errorMessage = err.message || "Failed to create API key."
+        }
+      } else if (err instanceof Error) {
+        errorMessage = err.message
+      }
+      
+      toast({ title: "Error", description: errorMessage, variant: "destructive" })
     } finally {
       setCreating(false)
       console.log('[API Keys] create:done')
