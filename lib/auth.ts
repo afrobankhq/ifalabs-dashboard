@@ -2,9 +2,11 @@
 import { tokenService } from './token-service'
 
 // Route through local proxy by default to avoid CORS and simplify paths
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL
-  ? process.env.NEXT_PUBLIC_API_URL
-  : (typeof window !== 'undefined' ? '/api/proxy' : 'https://api.ifalabs.com')
+// In browser: always use /api/proxy to avoid CORS issues
+// On server: use direct URL or fallback
+const API_BASE_URL = typeof window !== 'undefined' 
+  ? '/api/proxy'  // Always use proxy in browser to avoid CORS
+  : (process.env.PROXY_UPSTREAM_URL || process.env.NEXT_PUBLIC_API_URL || 'http://146.190.186.116:8000')
 
 export interface LoginCredentials {
   email: string
