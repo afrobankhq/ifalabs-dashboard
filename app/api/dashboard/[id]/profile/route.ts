@@ -5,10 +5,10 @@ const userProfiles = new Map<string, any>();
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const userId = params.id;
+    const { id: userId } = await params;
     
     // Get authorization header
     const authHeader = request.headers.get('authorization');
@@ -62,10 +62,10 @@ export async function GET(
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const userId = params.id;
+    const { id: userId } = await params;
     const updateData = await request.json();
     
     // Get authorization header
@@ -179,6 +179,47 @@ export async function PATCH(
     console.error('Error patching profile:', error);
     return NextResponse.json(
       { error: 'Failed to update profile' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id: userId } = await params;
+    
+    // Get authorization header
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return NextResponse.json(
+        { error: 'Authorization header required' },
+        { status: 401 }
+      );
+    }
+
+    // Check if profile exists
+    const profile = userProfiles.get(userId);
+    
+    // Delete the profile (even if it doesn't exist, we return success)
+    userProfiles.delete(userId);
+
+    console.log('Profile deleted successfully:', {
+      userId,
+      existed: !!profile
+    });
+
+    return NextResponse.json({
+      data: { id: userId },
+      message: 'Account deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Error deleting profile:', error);
+    return NextResponse.json(
+      { error: 'Failed to delete profile' },
       { status: 500 }
     );
   }

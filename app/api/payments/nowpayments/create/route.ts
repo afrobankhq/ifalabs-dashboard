@@ -26,19 +26,33 @@ export async function POST(request: NextRequest) {
 
     const payment = await response.json();
     
-    // Store payment in your database
-    // await fetch('http://your-golang-api/api/payments', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({
-    //     payment_id: payment.payment_id,
-    //     order_id: payment.order_id,
-    //     amount: payment.price_amount,
-    //     currency: payment.price_currency,
-    //     pay_currency: payment.pay_currency,
-    //     status: payment.payment_status,
-    //   }),
-    // });
+    // Store payment in backend database
+    try {
+      const backendUrl = process.env.PROXY_UPSTREAM_URL || 
+                        process.env.NEXT_PUBLIC_API_URL || 
+                        'http://localhost:8000';
+
+      await fetch(`${backendUrl}/api/payments/store`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          payment_id: payment.payment_id,
+          order_id: payment.order_id,
+          amount: payment.price_amount,
+          currency: payment.price_currency,
+          pay_currency: payment.pay_currency,
+          status: payment.payment_status,
+          pay_address: payment.pay_address,
+          pay_amount: payment.pay_amount,
+          actually_paid: payment.actually_paid || 0,
+          price_amount: payment.price_amount,
+          price_currency: payment.price_currency,
+        }),
+      });
+    } catch (storageError) {
+      console.error('Failed to store payment in backend:', storageError);
+      // Don't fail payment creation if storage fails
+    }
 
     return NextResponse.json(payment);
   } catch (error) {

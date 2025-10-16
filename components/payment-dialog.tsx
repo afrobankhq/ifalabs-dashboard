@@ -33,6 +33,7 @@ import {
   getPaymentStatusText,
   PaymentStatusPoller
 } from "@/lib/payments"
+import { useAuth } from "@/lib/auth-context"
 import { 
   PaymentDialogStep, 
   PaymentStatusType, 
@@ -70,10 +71,10 @@ interface PaymentDialogProps {
 }
 
 const SUPPORTED_CURRENCIES = [
+  { code: 'usdcbase', name: 'USD Coin (Base)', symbol: '$' },
   { code: 'btc', name: 'Bitcoin', symbol: '₿' },
   { code: 'eth', name: 'Ethereum', symbol: 'Ξ' },
   { code: 'usdt', name: 'Tether (USDT)', symbol: '₮' },
-  { code: 'usdc', name: 'USD Coin', symbol: '$' },
   { code: 'ltc', name: 'Litecoin', symbol: 'Ł' },
   { code: 'ada', name: 'Cardano', symbol: '₳' },
   { code: 'matic', name: 'Polygon', symbol: 'Ⓜ' },
@@ -82,7 +83,7 @@ const SUPPORTED_CURRENCIES = [
 
 export function PaymentDialog({ open, onOpenChange, selectedPlan, onPaymentSuccess }: PaymentDialogProps) {
   const [step, setStep] = useState<PaymentDialogStep>('select')
-  const [selectedCurrency, setSelectedCurrency] = useState('btc')
+  const [selectedCurrency, setSelectedCurrency] = useState('usdcbase')
   const [supportedCurrencies, setSupportedCurrencies] = useState<string[]>([])
   const [paymentData, setPaymentData] = useState<PaymentResponse | null>(null)
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatus | null>(null)
@@ -93,6 +94,7 @@ export function PaymentDialog({ open, onOpenChange, selectedPlan, onPaymentSucce
   const [timeRemaining, setTimeRemaining] = useState<number>(0)
   
   const { toast } = useToast()
+  const { user } = useAuth()
 
   useEffect(() => {
     if (open && step === 'select') {
@@ -177,7 +179,8 @@ export function PaymentDialog({ open, onOpenChange, selectedPlan, onPaymentSucce
       const paymentIntent = await paymentApiService.createPaymentIntent(
         selectedPlan.id,
         'crypto',
-        selectedPlan.billingFrequency || 'monthly'
+        selectedPlan.billingFrequency || 'monthly',
+        user?.id
       )
 
       // Create NOWPayments payment

@@ -11,7 +11,7 @@ const candidateUpstream =
   ''
 
 const isRelative = candidateUpstream.startsWith('/')
-const upstreamSafe = isRelative || !candidateUpstream ? 'http://146.190.186.116:8000' : candidateUpstream
+const upstreamSafe = isRelative || !candidateUpstream ? 'http://localhost:8000' : candidateUpstream
 const UPSTREAM_BASE = upstreamSafe.replace(/\/$/, '')
 
 // Log the configuration on startup (only in non-production)
@@ -23,8 +23,8 @@ if (process.env.NODE_ENV !== 'production') {
   })
 }
 
-async function handle(request: NextRequest, context: { params: { path: string[] } }) {
-  const { params } = await Promise.resolve(context)
+async function handle(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
+  const params = await context.params
   const targetPath = params?.path?.join('/') || ''
   const url = `${UPSTREAM_BASE}/${targetPath}`
 

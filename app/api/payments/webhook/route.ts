@@ -54,15 +54,19 @@ export async function POST(request: NextRequest) {
 
 async function handleConfirmingPayment(paymentData: any) {
   try {
-    // Update payment status in your database
-    // await fetch('http://your-golang-api/api/payments/update-status', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({
-    //     payment_id: paymentData.payment_id,
-    //     status: 'confirming',
-    //   }),
-    // });
+    const backendUrl = process.env.PROXY_UPSTREAM_URL || 
+                       process.env.NEXT_PUBLIC_API_URL || 
+                       'http://localhost:8000';
+
+    // Update payment status in backend
+    await fetch(`${backendUrl}/api/payments/${paymentData.payment_id}/status`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        payment_id: paymentData.payment_id,
+        status: 'confirming',
+      }),
+    });
     
     console.log('Payment confirming:', paymentData.payment_id);
   } catch (error) {
@@ -72,63 +76,67 @@ async function handleConfirmingPayment(paymentData: any) {
 
 async function handleConfirmedPayment(paymentData: any) {
   try {
-    // Extract plan ID from order ID
+    const backendUrl = process.env.PROXY_UPSTREAM_URL || 
+                       process.env.NEXT_PUBLIC_API_URL || 
+                       'http://localhost:8000';
+
+    // Extract plan ID and billing cycle from order ID
+    // Format: sub_{planId}_{billingFreq}_{userId}_{uuid}
     const orderIdParts = paymentData.order_id.split('_');
-    const planId = orderIdParts[1]; // Assuming format: sub_planId_uuid
+    const planId = orderIdParts[1];
+    const billingFreq = orderIdParts[2] || 'monthly';
+    const userId = orderIdParts[3];
 
-    // Update subscription in your Golang API
-    // await fetch('http://your-golang-api/api/subscriptions/activate', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({
-    //     order_id: paymentData.order_id,
-    //     payment_id: paymentData.payment_id,
-    //     plan_id: planId,
-    //     amount_paid: paymentData.actually_paid,
-    //     currency: paymentData.pay_currency,
-    //   }),
-    // });
+    // Activate subscription in backend
+    const activationResponse = await fetch(`${backendUrl}/api/subscriptions/activate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: userId,
+        plan_id: planId,
+        billing_cycle: billingFreq,
+        payment_id: paymentData.payment_id,
+        amount_paid: paymentData.actually_paid || paymentData.price_amount,
+        pay_currency: paymentData.pay_currency,
+        order_id: paymentData.order_id,
+      }),
+    });
 
-    // Update payment status
-    // await fetch('http://your-golang-api/api/payments/update-status', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({
-    //     payment_id: paymentData.payment_id,
-    //     status: 'confirmed',
-    //   }),
-    // });
+    if (!activationResponse.ok) {
+      const error = await activationResponse.json();
+      console.error('Failed to activate subscription:', error);
+      throw new Error(error.error || 'Subscription activation failed');
+    }
 
-    console.log('Subscription activated for payment:', paymentData.payment_id);
-    
-    // Optionally send confirmation email
-    // await sendSubscriptionConfirmationEmail(userEmail, planId);
+    const activationData = await activationResponse.json();
+    console.log('Subscription activated successfully:', activationData);
     
   } catch (error) {
     console.error('Error handling confirmed payment:', error);
+    // Even if backend fails, log the payment data for manual processing
+    console.error('Payment data for manual processing:', {
+      payment_id: paymentData.payment_id,
+      order_id: paymentData.order_id,
+      amount: paymentData.actually_paid,
+    });
   }
 }
 
 async function handleFailedPayment(paymentData: any) {
   try {
-    // Update payment status
-    // await fetch('http://your-golang-api/api/payments/update-status', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({
-    //     payment_id: paymentData.payment_id,
-    //     status: 'failed',
-    //   }),
-    // });
+    const backendUrl = process.env.PROXY_UPSTREAM_URL || 
+                       process.env.NEXT_PUBLIC_API_URL || 
+                       'http://localhost:8000';
 
-    // Clean up any pending subscriptions
-    // await fetch('http://your-golang-api/api/subscriptions/cancel-pending', {
-    //   method: 'POST',
-    //   headers: { 'Content-Type': 'application/json' },
-    //   body: JSON.stringify({
-    //     order_id: paymentData.order_id,
-    //   }),
-    // });
+    // Update payment status in backend
+    await fetch(`${backendUrl}/api/payments/${paymentData.payment_id}/status`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        payment_id: paymentData.payment_id,
+        status: paymentData.payment_status,
+      }),
+    });
 
     console.log('Payment failed:', paymentData.payment_id);
   } catch (error) {

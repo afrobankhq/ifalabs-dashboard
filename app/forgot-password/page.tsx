@@ -7,10 +7,10 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { Loader2, Mail, ArrowRight, CheckCircle } from "lucide-react"
+import { Loader2, Mail, ArrowRight, CheckCircle, ArrowLeft } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 
-export default function SignupPage() {
+export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
@@ -24,9 +24,9 @@ export default function SignupPage() {
     setIsLoading(true)
     
     try {
-      console.log('[Signup] Sending verification email to:', email)
+      console.log('[Forgot Password] Sending reset email to:', email)
       
-      const response = await fetch('/api/auth/register/initiate', {
+      const response = await fetch('/api/auth/password/forgot', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -37,21 +37,21 @@ export default function SignupPage() {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to send verification email')
+        throw new Error(data.error || 'Failed to send password reset email')
       }
 
-      console.log('[Signup] Verification email sent successfully')
+      console.log('[Forgot Password] Reset email sent successfully')
       setEmailSent(true)
       toast({ 
         title: "Check your email", 
-        description: "We've sent you a verification link to complete your registration." 
+        description: "We've sent you a password reset link." 
       })
     } catch (err) {
-      console.error('[Signup] Error:', err)
-      const errorMessage = err instanceof Error ? err.message : "Failed to send verification email. Please try again."
+      console.error('[Forgot Password] Error:', err)
+      const errorMessage = err instanceof Error ? err.message : "Failed to send reset email. Please try again."
       setError(errorMessage)
       toast({ 
-        title: "Signup Failed", 
+        title: "Request Failed", 
         description: errorMessage, 
         variant: "destructive" 
       })
@@ -73,12 +73,12 @@ export default function SignupPage() {
               </div>
               <CardTitle>Check your email</CardTitle>
               <CardDescription>
-                We've sent a verification link to <strong>{email}</strong>
+                We've sent a password reset link to <strong>{email}</strong>
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <p className="text-sm text-muted-foreground text-center">
-                Click the link in the email to complete your registration. 
+                Click the link in the email to reset your password. 
                 The link will expire in 24 hours.
               </p>
               
@@ -99,7 +99,7 @@ export default function SignupPage() {
               </div>
 
               <div className="text-center text-sm pt-2">
-                Already have an account?{' '}
+                Remember your password?{' '}
                 <Link href="/login" className="text-primary hover:underline font-medium">
                   Sign in
                 </Link>
@@ -120,14 +120,14 @@ export default function SignupPage() {
               <span className="text-primary-foreground font-bold text-xl">IFA LABS</span>
             </div>
           </div>
-          <h1 className="text-2xl font-bold">Create your account</h1>
-          <p className="text-muted-foreground">Enter your email to get started</p>
+          <h1 className="text-2xl font-bold">Reset your password</h1>
+          <p className="text-muted-foreground">Enter your email to receive a reset link</p>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>Sign Up</CardTitle>
-            <CardDescription>We'll send you a verification link to complete registration</CardDescription>
+            <CardTitle>Forgot Password</CardTitle>
+            <CardDescription>We'll send you a link to reset your password</CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -153,7 +153,7 @@ export default function SignupPage() {
                   />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  We'll send you a secure link to verify your email and complete registration
+                  We'll send a password reset link to this email if it's associated with an account
                 </p>
               </div>
 
@@ -161,29 +161,22 @@ export default function SignupPage() {
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Sending verification email...
+                    Sending reset link...
                   </>
                 ) : (
                   <>
-                    Continue
+                    Send reset link
                     <ArrowRight className="ml-2 h-4 w-4" />
                   </>
                 )}
               </Button>
             </form>
 
-            <div className="mt-4 space-y-2">
-              <div className="text-center text-sm">
-                Already have an account?{' '}
-                <Link href="/login" className="text-primary hover:underline font-medium">
-                  Sign in
-                </Link>
-              </div>
-              <div className="text-center text-sm">
-                <Link href="/forgot-password" className="text-muted-foreground hover:text-primary hover:underline">
-                  Forgot password?
-                </Link>
-              </div>
+            <div className="mt-4 text-center text-sm">
+              <Link href="/login" className="text-primary hover:underline font-medium inline-flex items-center">
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back to sign in
+              </Link>
             </div>
           </CardContent>
         </Card>

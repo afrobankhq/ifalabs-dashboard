@@ -82,13 +82,13 @@ import {
   
   // Payment API Service for frontend
   export const paymentApiService = {
-    // Create payment intent
-    createPaymentIntent: async (planId: string, paymentMethod: 'crypto' | 'traditional', billingFrequency: 'monthly' | 'annual' = 'monthly'): Promise<PaymentIntent> => {
-      const response = await fetch('/api/payments/create-intent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId, paymentMethod, billingFrequency }),
-      });
+  // Create payment intent
+  createPaymentIntent: async (planId: string, paymentMethod: 'crypto' | 'traditional', billingFrequency: 'monthly' | 'annual' = 'monthly', userId?: string): Promise<PaymentIntent> => {
+    const response = await fetch('/api/payments/create-intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planId, paymentMethod, billingFrequency, userId }),
+    });
   
       if (!response.ok) {
         const errorData = await response.json();
