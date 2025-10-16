@@ -85,90 +85,84 @@ const calculateNextBillingDate = (billingFrequency: 'monthly' | 'annual', subscr
   })
 }
 
-// Helper function to generate invoices based on subscription data
-const generateInvoices = (plan: Plan, subscriptionStartDate: Date, billingHistory: any[] = []): Invoice[] => {
+// Helper function to generate invoices based on actual billing history
+const generateInvoices = (plan: Plan, billingHistory: any[] = []): Invoice[] => {
   if (plan.id === 'free') return []
   
   const invoices: Invoice[] = []
-  const now = new Date()
   const billingFrequency = plan.billingFrequency || 'monthly'
   const planPrice = typeof plan.price === 'number' ? plan.price : 0
   
-  // Generate invoices from subscription start date
-  let currentDate = new Date(subscriptionStartDate)
-  let invoiceNumber = 1
-  
-  while (currentDate <= now) {
-    const nextBillingDate = new Date(currentDate)
+  // Only show actual payments from billing history
+  billingHistory.forEach((bill, index) => {
+    const billDate = new Date(bill.created_at || bill.date)
+    const nextBillingDate = new Date(billDate)
+    
+    // Calculate billing period
     if (billingFrequency === 'monthly') {
       nextBillingDate.setMonth(nextBillingDate.getMonth() + 1)
     } else {
       nextBillingDate.setFullYear(nextBillingDate.getFullYear() + 1)
     }
     
-    const billingPeriodStart = new Date(currentDate)
     const billingPeriodEnd = new Date(nextBillingDate)
     billingPeriodEnd.setDate(billingPeriodEnd.getDate() - 1)
     
-    // Check if this invoice exists in billing history
-    const existingInvoice = billingHistory.find(bill => {
-      const billDate = new Date(bill.created_at)
-      return billDate.getTime() === currentDate.getTime()
-    })
-    
     const invoice: Invoice = {
-      id: `INV-${String(invoiceNumber).padStart(3, '0')}`,
-      date: currentDate.toISOString().split('T')[0],
-      amount: planPrice,
-      status: existingInvoice ? "paid" : (currentDate <= now ? "paid" : "pending"),
-      description: `${plan.name} - ${currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
+      id: `INV-${String(index + 1).padStart(3, '0')}`,
+      date: billDate.toISOString().split('T')[0],
+      amount: bill.amount || planPrice,
+      status: bill.status || "paid",
+      description: `${plan.name} - ${billDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
       downloadUrl: "#",
       billingPeriod: {
-        start: billingPeriodStart.toISOString().split('T')[0],
+        start: billDate.toISOString().split('T')[0],
         end: billingPeriodEnd.toISOString().split('T')[0]
       }
     }
     
     invoices.push(invoice)
-    
-    // Move to next billing period
-    if (billingFrequency === 'monthly') {
-      currentDate.setMonth(currentDate.getMonth() + 1)
-    } else {
-      currentDate.setFullYear(currentDate.getFullYear() + 1)
-    }
-    invoiceNumber++
-  }
+  })
   
-  // Add next upcoming invoice if not in the past
-  if (currentDate > now) {
-    const nextBillingDate = new Date(currentDate)
-    const billingPeriodStart = new Date(currentDate)
-    const billingPeriodEnd = new Date(currentDate)
+  // Add next upcoming invoice based on last payment
+  if (billingHistory.length > 0) {
+    const lastBill = billingHistory[billingHistory.length - 1]
+    const lastBillDate = new Date(lastBill.created_at || lastBill.date)
+    const nextBillingDate = new Date(lastBillDate)
     
     if (billingFrequency === 'monthly') {
-      billingPeriodEnd.setMonth(billingPeriodEnd.getMonth() + 1)
-      billingPeriodEnd.setDate(billingPeriodEnd.getDate() - 1)
+      nextBillingDate.setMonth(nextBillingDate.getMonth() + 1)
     } else {
-      billingPeriodEnd.setFullYear(billingPeriodEnd.getFullYear() + 1)
+      nextBillingDate.setFullYear(nextBillingDate.getFullYear() + 1)
+    }
+    
+    const now = new Date()
+    // Only show upcoming invoice if next billing date is in the future
+    if (nextBillingDate > now) {
+      const billingPeriodEnd = new Date(nextBillingDate)
+      if (billingFrequency === 'monthly') {
+        billingPeriodEnd.setMonth(billingPeriodEnd.getMonth() + 1)
+      } else {
+        billingPeriodEnd.setFullYear(billingPeriodEnd.getFullYear() + 1)
+      }
       billingPeriodEnd.setDate(billingPeriodEnd.getDate() - 1)
+      
+      const upcomingInvoice: Invoice = {
+        id: `INV-${String(billingHistory.length + 1).padStart(3, '0')}`,
+        date: nextBillingDate.toISOString().split('T')[0],
+        amount: planPrice,
+        status: "pending",
+        description: `${plan.name} - ${nextBillingDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
+        downloadUrl: "#",
+        billingPeriod: {
+          start: nextBillingDate.toISOString().split('T')[0],
+          end: billingPeriodEnd.toISOString().split('T')[0]
+        },
+        nextBillingDate: nextBillingDate.toISOString().split('T')[0]
+      }
+      
+      invoices.push(upcomingInvoice)
     }
-    
-    const upcomingInvoice: Invoice = {
-      id: `INV-${String(invoiceNumber).padStart(3, '0')}`,
-      date: currentDate.toISOString().split('T')[0],
-      amount: planPrice,
-      status: "pending",
-      description: `${plan.name} - ${currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
-      downloadUrl: "#",
-      billingPeriod: {
-        start: billingPeriodStart.toISOString().split('T')[0],
-        end: billingPeriodEnd.toISOString().split('T')[0]
-      },
-      nextBillingDate: currentDate.toISOString().split('T')[0]
-    }
-    
-    invoices.push(upcomingInvoice)
   }
   
   return invoices.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
@@ -374,25 +368,27 @@ export default function BillingPage() {
 
       let displayPlan: Plan | null = null
       if (matchedPlan) {
-        // Ensure paid plans show annual pricing by default to match plan page
+        // Get the actual billing frequency from localStorage
+        const actualBillingFrequency = localStorage.getItem('billing_frequency') as 'monthly' | 'annual' | null
         const planToDisplay = { ...matchedPlan, current: true }
-        if (matchedPlan.id !== 'free' && matchedPlan.billingFrequency === 'annual') {
-          // Plan is already set to annual, use as-is
-          displayPlan = planToDisplay
-        } else if (matchedPlan.id !== 'free') {
-          // Convert monthly plan to annual for display consistency
-          const annualPrice = matchedPlan.annualPrice || (typeof matchedPlan.price === 'number' ? matchedPlan.price * 12 : 0)
-          planToDisplay.price = annualPrice
-          planToDisplay.priceDescription = `$${annualPrice}`
-          planToDisplay.billingFrequency = 'annual'
-          displayPlan = planToDisplay
-        } else {
-          // Free plan stays as-is
-          displayPlan = planToDisplay
+        
+        if (matchedPlan.id !== 'free' && actualBillingFrequency) {
+          // Use the actual billing frequency that was selected during payment
+          planToDisplay.billingFrequency = actualBillingFrequency
+          
+          if (actualBillingFrequency === 'monthly') {
+            planToDisplay.price = matchedPlan.monthlyPrice || 0
+            planToDisplay.priceDescription = `$${matchedPlan.monthlyPrice || 0}`
+          } else {
+            planToDisplay.price = matchedPlan.annualPrice || 0
+            planToDisplay.priceDescription = `$${matchedPlan.annualPrice || 0}`
+          }
         }
+        
+        displayPlan = planToDisplay
         setCurrentPlan(displayPlan)
         setIsFreeTier(matchedPlan.id === 'free')
-        console.log('Set current plan to:', matchedPlan.name, 'Free tier:', matchedPlan.id === 'free')
+        console.log('Set current plan to:', matchedPlan.name, 'Free tier:', matchedPlan.id === 'free', 'Billing frequency:', displayPlan.billingFrequency)
       }
 
       // Only load billing info and invoices for paid plans
@@ -403,36 +399,15 @@ export default function BillingPage() {
           setBillingInfo(billingData)
         }
 
-        // Get subscription start date from profile or localStorage
-        let subscriptionStartDate = new Date()
-        
-        // Try to get subscription start date from profile
-        if (profile && profile.subscription_start_date) {
-          subscriptionStartDate = new Date(profile.subscription_start_date)
-        } else {
-          // Try to get from localStorage
-          const storedStartDate = localStorage.getItem('subscription_start_date')
-          if (storedStartDate) {
-            subscriptionStartDate = new Date(storedStartDate)
-          } else if (profile && profile.created_at) {
-            // Fallback to profile creation date
-            subscriptionStartDate = new Date(profile.created_at)
-          } else {
-            // Fallback to current date minus 1 month for demo purposes
-            subscriptionStartDate = new Date()
-            subscriptionStartDate.setMonth(subscriptionStartDate.getMonth() - 1)
-          }
-        }
-
-        // Get billing history from localStorage
+        // Get billing history from localStorage - this contains actual payment records
         const billingHistory = JSON.parse(localStorage.getItem('billing_history') || '[]')
         
-        // Generate invoices dynamically using the display plan (which shows annual pricing)
-        const generatedInvoices = generateInvoices(displayPlan!, subscriptionStartDate, billingHistory)
+        // Generate invoices based only on actual billing history
+        const generatedInvoices = generateInvoices(displayPlan!, billingHistory)
         setInvoices(generatedInvoices)
         
         console.log('Generated invoices:', generatedInvoices.length, 'for plan:', matchedPlan.name)
-        console.log('Subscription start date:', subscriptionStartDate.toISOString())
+        console.log('Billing history records:', billingHistory.length)
       } else {
         // Clear billing data for free tier
         setBillingInfo(null)

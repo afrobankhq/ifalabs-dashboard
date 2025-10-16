@@ -6,7 +6,7 @@ import { tokenService } from './token-service'
 // On server: use direct URL or fallback
 const API_BASE_URL = typeof window !== 'undefined' 
   ? '/api/proxy'  // Always use proxy in browser to avoid CORS
-  : (process.env.PROXY_UPSTREAM_URL || process.env.NEXT_PUBLIC_API_URL || 'http://146.190.186.116:8000')
+  : (process.env.PROXY_UPSTREAM_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000')
 
 export interface LoginCredentials {
   email: string
@@ -206,7 +206,7 @@ class AuthService {
     }
   }
 
-  // Register new user
+  // Register new user (legacy - direct signup without email verification)
   async signup(signupData: SignupData): Promise<AuthResponse> {
     try {
       const envRegister = process.env.NEXT_PUBLIC_AUTH_REGISTER_PATH
@@ -284,6 +284,84 @@ class AuthService {
       return mapped
     } catch (error) {
       throw new Error(error instanceof Error ? error.message : 'Registration failed')
+    }
+  }
+
+  // Initiate email verification for registration
+  async initiateEmailVerification(email: string): Promise<{ message: string }> {
+    try {
+      const response = await fetch('/api/auth/register/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to send verification email')
+      }
+
+      return { message: data.message || 'Verification email sent successfully' }
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'Failed to send verification email')
+    }
+  }
+
+  // Verify email token
+  async verifyEmailToken(token: string): Promise<{ valid: boolean; email?: string }> {
+    try {
+      const response = await fetch(`/api/auth/register/verify?token=${encodeURIComponent(token)}`)
+      const data = await response.json()
+
+      if (!response.ok || !data.valid) {
+        return { valid: false }
+      }
+
+      return { valid: true, email: data.email }
+    } catch (error) {
+      return { valid: false }
+    }
+  }
+
+  // Complete registration after email verification
+  async completeRegistration(data: {
+    token: string
+    name: string
+    firstName: string
+    lastName: string
+    password: string
+    description?: string
+    website?: string
+  }): Promise<{ id: string; email: string; message: string }> {
+    try {
+      const response = await fetch('/api/auth/register/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: data.token,
+          name: data.name,
+          first_name: data.firstName,
+          last_name: data.lastName,
+          password: data.password,
+          description: data.description || '',
+          website: data.website || '',
+        }),
+      })
+
+      const responseData = await response.json()
+
+      if (!response.ok) {
+        throw new Error(responseData.error || 'Failed to complete registration')
+      }
+
+      return {
+        id: responseData.id,
+        email: responseData.email,
+        message: responseData.message || 'Registration completed successfully',
+      }
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'Failed to complete registration')
     }
   }
 

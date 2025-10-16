@@ -93,9 +93,10 @@ export default function AccountPage() {
   const [newPassword, setNewPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false)
   const { toast } = useToast()
   const { execute: executeApiCall, loading, error } = useApiCall()
-  const { user } = useAuth()
+  const { user, logout } = useAuth()
 
   useEffect(() => {
     if (!user) return
@@ -260,7 +261,10 @@ export default function AccountPage() {
     }
   }
 
-  const handlePasswordChange = () => {
+  const handlePasswordChange = async () => {
+    if (!user) return
+
+    // Validate passwords
     if (newPassword !== confirmPassword) {
       toast({
         title: "Error",
@@ -279,13 +283,37 @@ export default function AccountPage() {
       return
     }
 
-    setCurrentPassword("")
-    setNewPassword("")
-    setConfirmPassword("")
-    toast({
-      title: "Password Changed",
-      description: "Your password has been updated successfully.",
-    })
+    if (!currentPassword) {
+      toast({
+        title: "Error",
+        description: "Current password is required.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      await executeApiCall(() => 
+        apiService.changePassword(user.id, currentPassword, newPassword)
+      )
+      
+      setCurrentPassword("")
+      setNewPassword("")
+      setConfirmPassword("")
+      
+      toast({
+        title: "Password Changed",
+        description: "Your password has been updated successfully.",
+      })
+    } catch (err) {
+      console.error('Failed to change password:', err)
+      const errorMessage = err instanceof Error ? err.message : "Failed to change password. Please try again."
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      })
+    }
   }
 
   const handleNotificationUpdate = (key: keyof NotificationSettings, value: boolean) => {
@@ -296,13 +324,56 @@ export default function AccountPage() {
     })
   }
 
-  const handleAccountDeletion = () => {
-    toast({
-      title: "Account Deletion Requested",
-      description: "We'll send you an email with instructions to confirm account deletion.",
-      variant: "destructive",
-    })
-    setIsDeleteDialogOpen(false)
+  const handleAccountDeletion = async () => {
+    if (!user) return
+
+    setIsDeletingAccount(true)
+    
+    try {
+      // Call the delete account API
+      console.log('[Account] Attempting to delete account for user:', user.id)
+      await executeApiCall(() => apiService.deleteCompanyAccount(user.id))
+      console.log('[Account] Account deletion successful')
+      
+      // Close dialog immediately
+      setIsDeleteDialogOpen(false)
+      
+      // Show success message
+      toast({
+        title: "Account Deleted",
+        description: "Your account has been permanently deleted. Redirecting to login...",
+      })
+      
+      // Immediately logout and clear all data
+      console.log('[Account] Clearing all data and logging out')
+      
+      // Call logout first (this will clear tokens properly)
+      try {
+        await logout()
+      } catch (logoutErr) {
+        console.error('[Account] Logout error:', logoutErr)
+      }
+      
+      // Clear all localStorage as backup
+      localStorage.clear()
+      
+      // Force redirect to login page
+      setTimeout(() => {
+        window.location.href = '/login'
+      }, 500)
+      
+    } catch (err) {
+      console.error('[Account] Failed to delete account:', err)
+      
+      toast({
+        title: "Deletion Failed",
+        description: "Failed to delete account. Please try again or contact support.",
+        variant: "destructive",
+      })
+      
+      setIsDeletingAccount(false)
+      setIsDeleteDialogOpen(false)
+    }
   }
 
   if (isLoading) {
@@ -440,137 +511,60 @@ export default function AccountPage() {
               <Shield className="h-5 w-5" />
               Security
             </CardTitle>
-            <CardDescription>Manage your account security and authentication settings.</CardDescription>
+            <CardDescription>Manage your password and security settings.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="space-y-2">
-                <Label>Two-Factor Authentication</Label>
-                <div className="flex items-center gap-2">
-                  <Badge variant={security.twoFactorEnabled ? "default" : "secondary"}>
-                    {security.twoFactorEnabled ? "Enabled" : "Disabled"}
-                  </Badge>
-                  <Button variant="outline" size="sm">
-                    {security.twoFactorEnabled ? "Disable" : "Enable"}
+          <CardContent>
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm font-medium mb-3">Change Password</h3>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="current-password">Current Password</Label>
+                    <Input
+                      id="current-password"
+                      type="password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      placeholder="Enter your current password"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="new-password">New Password</Label>
+                    <Input
+                      id="new-password"
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Enter your new password"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Password must be at least 8 characters long
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="confirm-password">Confirm New Password</Label>
+                    <Input
+                      id="confirm-password"
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Confirm your new password"
+                    />
+                  </div>
+                  <Button 
+                    onClick={handlePasswordChange} 
+                    disabled={loading || !currentPassword || !newPassword || !confirmPassword}
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Updating...
+                      </>
+                    ) : (
+                      "Update Password"
+                    )}
                   </Button>
                 </div>
-              </div>
-              <div className="space-y-2">
-                <Label>Last Password Change</Label>
-                <p className="text-sm text-muted-foreground">
-                  {new Date(security.lastPasswordChange).toLocaleDateString()}
-                </p>
-              </div>
-              <div className="space-y-2">
-                <Label>Active Sessions</Label>
-                <p className="text-sm text-muted-foreground">{security.activeSessions} devices</p>
-              </div>
-            </div>
-
-            <Separator />
-
-            <div className="space-y-4">
-              <h4 className="text-sm font-medium">Change Password</h4>
-              <div className="grid gap-4 md:grid-cols-3">
-                <div className="space-y-2">
-                  <Label htmlFor="current-password">Current Password</Label>
-                  <Input
-                    id="current-password"
-                    type="password"
-                    value={currentPassword}
-                    onChange={(e) => setCurrentPassword(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="new-password">New Password</Label>
-                  <Input
-                    id="new-password"
-                    type="password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="confirm-password">Confirm Password</Label>
-                  <Input
-                    id="confirm-password"
-                    type="password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                  />
-                </div>
-              </div>
-              <Button onClick={handlePasswordChange} disabled={!currentPassword || !newPassword || !confirmPassword}>
-                Update Password
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Notification Preferences */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Bell className="h-5 w-5" />
-              Notifications
-            </CardTitle>
-            <CardDescription>Configure how you want to receive notifications and updates.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Email Notifications</Label>
-                  <p className="text-sm text-muted-foreground">Receive notifications via email</p>
-                </div>
-                <Switch
-                  checked={notifications.emailNotifications}
-                  onCheckedChange={(checked) => handleNotificationUpdate("emailNotifications", checked)}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Push Notifications</Label>
-                  <p className="text-sm text-muted-foreground">Receive push notifications in your browser</p>
-                </div>
-                <Switch
-                  checked={notifications.pushNotifications}
-                  onCheckedChange={(checked) => handleNotificationUpdate("pushNotifications", checked)}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Marketing Emails</Label>
-                  <p className="text-sm text-muted-foreground">Receive updates about new features and promotions</p>
-                </div>
-                <Switch
-                  checked={notifications.marketingEmails}
-                  onCheckedChange={(checked) => handleNotificationUpdate("marketingEmails", checked)}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Security Alerts</Label>
-                  <p className="text-sm text-muted-foreground">Important security notifications (recommended)</p>
-                </div>
-                <Switch
-                  checked={notifications.securityAlerts}
-                  onCheckedChange={(checked) => handleNotificationUpdate("securityAlerts", checked)}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label>Weekly Reports</Label>
-                  <p className="text-sm text-muted-foreground">Weekly summary of your account activity</p>
-                </div>
-                <Switch
-                  checked={notifications.weeklyReports}
-                  onCheckedChange={(checked) => handleNotificationUpdate("weeklyReports", checked)}
-                />
               </div>
             </div>
           </CardContent>
@@ -609,11 +603,26 @@ export default function AccountPage() {
                     </DialogDescription>
                   </DialogHeader>
                   <DialogFooter>
-                    <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>
+                    <Button 
+                      variant="outline" 
+                      onClick={() => setIsDeleteDialogOpen(false)}
+                      disabled={isDeletingAccount}
+                    >
                       Cancel
                     </Button>
-                    <Button variant="destructive" onClick={handleAccountDeletion}>
-                      Yes, delete my account
+                    <Button 
+                      variant="destructive" 
+                      onClick={handleAccountDeletion}
+                      disabled={isDeletingAccount}
+                    >
+                      {isDeletingAccount ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Deleting...
+                        </>
+                      ) : (
+                        "Yes, delete my account"
+                      )}
                     </Button>
                   </DialogFooter>
                 </DialogContent>

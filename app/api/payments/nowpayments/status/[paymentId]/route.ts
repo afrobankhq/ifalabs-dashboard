@@ -3,10 +3,10 @@ import { NextRequest, NextResponse } from 'next/server';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { paymentId: string } }
+  { params }: { params: Promise<{ paymentId: string }> }
 ) {
   try {
-    const { paymentId } = params;
+    const { paymentId } = await params;
 
     const response = await fetch(`https://api.nowpayments.io/v1/payment/${paymentId}`, {
       headers: {

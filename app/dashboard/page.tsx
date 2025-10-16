@@ -2,25 +2,31 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { BarChart3, Key, Users, CreditCard, TrendingUp, Activity, DollarSign, Calendar } from "lucide-react"
+import { BarChart3, Key, Users, CreditCard, TrendingUp, Activity, DollarSign, Calendar, Loader2 } from "lucide-react"
 import { useEffect, useState } from 'react'
 import { apiService, type ApiKey, type CompanyProfile } from '@/lib/api'
 import { authService } from '@/lib/auth'
 import { useAuth } from '@/lib/auth-context'
+import { ProtectedRoute } from '@/components/protected-route'
 
 export default function DashboardPage() {
   const [apiKeys, setApiKeys] = useState<ApiKey[] | null>(null)
   const [apiRequests, setApiRequests] = useState<number | null>(null)
   const [profile, setProfile] = useState<CompanyProfile | null>(null)
-  const [currentPlan, setCurrentPlan] = useState<string>('free')
+  const [currentPlan, setCurrentPlan] = useState<string>('')
+  const [isLoading, setIsLoading] = useState(true)
   const { user } = useAuth()
 
 
   useEffect(() => {
     const load = async () => {
       try {
-        const currentUser = user ?? authService.getCurrentUser()
-        if (!currentUser?.id) return
+        setIsLoading(true)
+        const currentUser = user ?? await authService.getCurrentUser()
+        if (!currentUser?.id) {
+          setIsLoading(false)
+          return
+        }
         
         const prof = await apiService.getCompanyProfile(currentUser.id)
         
@@ -45,6 +51,8 @@ export default function DashboardPage() {
           if (storedPlan) {
             const planId = storedPlan.toLowerCase().trim()
             setCurrentPlan(planId || 'free')
+          } else {
+            setCurrentPlan('free')
           }
         }
 
@@ -56,22 +64,41 @@ export default function DashboardPage() {
           : 0
         setApiRequests(Number(total) || 0)
       } catch (e) {
+        console.error('Failed to load dashboard data:', e)
         setApiKeys([])
         setApiRequests(0)
         setCurrentPlan('free')
+      } finally {
+        setIsLoading(false)
       }
     }
     load()
   }, [user])
 
+  if (isLoading) {
+    return (
+      <ProtectedRoute>
+        <div className="flex flex-1 flex-col gap-4 p-4">
+          <div className="flex items-center justify-center h-[calc(100vh-200px)]">
+            <div className="text-center">
+              <Loader2 className="h-12 w-12 animate-spin mx-auto mb-4 text-primary" />
+              <h2 className="text-xl font-semibold mb-2">Loading Dashboard</h2>
+              <p className="text-muted-foreground">Fetching your account information...</p>
+            </div>
+          </div>
+        </div>
+      </ProtectedRoute>
+    )
+  }
 
   return (
+    <ProtectedRoute>
     <div className="flex flex-1 flex-col gap-4 p-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-muted-foreground">Welcome back! Here's an overview of your account activity.</p>
+          <p className="text-muted-foreground">Welcome! Here's an overview of your account activity.</p>
         </div>
       </div>
 
@@ -104,7 +131,7 @@ export default function DashboardPage() {
             <CreditCard className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{currentPlan || '—'}</div>
+            <div className="text-2xl font-bold capitalize">{currentPlan || '—'}</div>
             <p className="text-xs text-muted-foreground">
               <Badge variant="secondary">Active</Badge>
             </p>
@@ -114,26 +141,60 @@ export default function DashboardPage() {
 
       {/* Recent Activity */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-      
+        <Card className="col-span-4 lg:col-span-4">
+          <CardHeader>
+            <CardTitle>Recent Activity</CardTitle>
+            <CardDescription>Your recent API usage and activity.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {apiRequests !== null && apiRequests > 0 ? (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Activity className="h-4 w-4 text-muted-foreground" />
+                    <span className="text-sm">Total API requests this month</span>
+                  </div>
+                  <span className="text-sm font-semibold">{apiRequests}</span>
+                </div>
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Activity className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p>No activity yet. Create an API key to get started!</p>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
 
-        <Card className="col-span-3">
+        <Card className="col-span-4 lg:col-span-3">
           <CardHeader>
             <CardTitle>Quick Actions</CardTitle>
             <CardDescription>Common tasks and shortcuts.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            <Button className="w-full justify-start bg-transparent" variant="outline">
-              <Key className="mr-2 h-4 w-4" />
-              Create New API Key
+            <Button className="w-full justify-start" variant="outline" asChild>
+              <a href="/api-keys">
+                <Key className="mr-2 h-4 w-4" />
+                Manage API Keys
+              </a>
             </Button>
-            <Button className="w-full justify-start bg-transparent" variant="outline">
-              <CreditCard className="mr-2 h-4 w-4" />
-              Update Billing Info
+            <Button className="w-full justify-start" variant="outline" asChild>
+              <a href="/billing">
+                <CreditCard className="mr-2 h-4 w-4" />
+                Update Billing
+              </a>
+            </Button>
+            <Button className="w-full justify-start" variant="outline" asChild>
+              <a href="/account">
+                <Users className="mr-2 h-4 w-4" />
+                Account Settings
+              </a>
             </Button>
           </CardContent>
         </Card>
       </div>
 
     </div>
+    </ProtectedRoute>
   )
 }

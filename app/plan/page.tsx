@@ -44,14 +44,14 @@ interface Plan {
 const defaultPlans: Plan[] = [
   {
     id: "free",
-    name: "Free Tier",
+    name: "Free tier",
     price: 0,
     priceDescription: "$0",
     description: "Perfect for getting started and testing our API",
     features: {
-      dataAccess: "All feeds",
+      dataAccess: "Two feeds",
       apiRequests: "1,000 reqs/month",
-      rateLimit: "30 seconds",
+      rateLimit: "10 reqs/hour",
       requestCall: "$0.00000",
       support: "Email & Community"
     },
@@ -61,49 +61,49 @@ const defaultPlans: Plan[] = [
   },
   {
     id: "developer",
-    name: "Developer Tier",
-    price: 500, // Annual price (10 months free)
-    priceDescription: "$500",
+    name: "Developer tier",
+    price: 5, // Monthly price
+    priceDescription: "$5",
     description: "Great for developers building applications",
     features: {
       dataAccess: "All feeds",
       apiRequests: "10,000 reqs/month",
-      rateLimit: "10 seconds",
+      rateLimit: "100 reqs/hour",
       requestCall: "$0.0005",
       support: "24/7 support"
     },
     popular: true,
-    billingFrequency: 'annual',
-    monthlyPrice: 50,
+    billingFrequency: 'monthly',
+    monthlyPrice: 5,
     annualPrice: 500,
   },
   {
     id: "professional",
-    name: "Professional Tier",
-    price: 1000, // Annual price (2 months free)
-    priceDescription: "$1,000",
+    name: "Professional tier",
+    price: 100, // Monthly price
+    priceDescription: "$100",
     description: "For growing businesses with higher demands",
     features: {
       dataAccess: "All feeds + Historical data",
       apiRequests: "100,000 reqs/month",
-      rateLimit: "2 seconds",
+      rateLimit: "500 reqs/hour",
       requestCall: "$0.0002",
       support: "24/7 support"
     },
-    billingFrequency: 'annual',
+    billingFrequency: 'monthly',
     monthlyPrice: 100,
     annualPrice: 1000,
   },
   {
     id: "enterprise",
-    name: "Enterprise Tier",
+    name: "Enterprise tier",
     price: -1,
     priceDescription: "Custom",
     description: "For large organizations with custom requirements",
     features: {
       dataAccess: "All feeds + Private",
       apiRequests: "Unlimited (custom SLA)",
-      rateLimit: "Custom",
+      rateLimit: "Unlimited",
       requestCall: "Custom",
       support: "24/7 support + dedicated engineer"
     },
@@ -150,7 +150,7 @@ export default function PlanPage() {
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null)
   const [paymentMethod, setPaymentMethod] = useState<'crypto' | 'traditional'>('crypto')
-  const [billingFrequency, setBillingFrequency] = useState<'monthly' | 'annual'>('annual')
+  const [billingFrequency, setBillingFrequency] = useState<'monthly' | 'annual'>('monthly')
   const { toast } = useToast()
   const { execute: executeApiCall, loading, error } = useApiCall()
   const { user } = useAuth()
@@ -159,6 +159,17 @@ export default function PlanPage() {
     if (!user) return
     loadPlanData()
   }, [user])
+
+  // Initialize plans with correct pricing based on billing frequency
+  useEffect(() => {
+    setPlans(prevPlans => updatePlanPricing(prevPlans, billingFrequency))
+    
+    // Update current plan pricing as well
+    if (currentPlan) {
+      const updatedCurrentPlan = updatePlanPricing([currentPlan], billingFrequency)[0]
+      setCurrentPlan(updatedCurrentPlan)
+    }
+  }, [billingFrequency])
 
   // Listen for profile updates from payment success page
   useEffect(() => {
@@ -275,9 +286,12 @@ export default function PlanPage() {
       console.log('Plan page - Is free tier:', matchedPlan?.id === 'free')
 
       if (matchedPlan) {
-        const updatedPlan = { ...matchedPlan, current: true }
+        const updatedPlan = { ...matchedPlan, current: true, billingFrequency }
         setCurrentPlan(updatedPlan)
-        setPlans(prevPlans => prevPlans.map(plan => ({ ...plan, current: plan.id === matchedPlan!.id })))
+        setPlans(prevPlans => {
+          const updatedPlans = prevPlans.map(plan => ({ ...plan, current: plan.id === matchedPlan!.id }))
+          return updatePlanPricing(updatedPlans, billingFrequency)
+        })
         console.log('Plan page - Set current plan to:', matchedPlan.name)
       }
 
@@ -293,10 +307,10 @@ export default function PlanPage() {
       if (freePlan) {
         const updatedFreePlan = { ...freePlan, current: true }
         setCurrentPlan(updatedFreePlan)
-        setPlans(defaultPlans.map(plan => ({
+        setPlans(updatePlanPricing(defaultPlans.map(plan => ({
           ...plan,
           current: plan.id === 'free'
-        })))
+        })), billingFrequency))
       }
     }
   }
@@ -377,6 +391,34 @@ export default function PlanPage() {
   }
 
   const handlePaymentSuccess = () => {
+    if (selectedPlan) {
+      // Store billing frequency
+      const billingFreq = selectedPlan.billingFrequency || 'monthly'
+      localStorage.setItem('billing_frequency', billingFreq)
+      
+      // Store subscription start date
+      const now = new Date()
+      localStorage.setItem('subscription_start_date', now.toISOString())
+      
+      // Create initial billing history record
+      const billingHistory = [{
+        created_at: now.toISOString(),
+        date: now.toISOString(),
+        amount: typeof selectedPlan.price === 'number' ? selectedPlan.price : 0,
+        status: 'paid',
+        plan_id: selectedPlan.id,
+        plan_name: selectedPlan.name,
+        billing_frequency: billingFreq
+      }]
+      localStorage.setItem('billing_history', JSON.stringify(billingHistory))
+      
+      // Store subscription plan
+      localStorage.setItem('subscription_plan', selectedPlan.id)
+      
+      // Update profile timestamp to trigger reload in other pages
+      localStorage.setItem('profile_updated_timestamp', Date.now().toString())
+    }
+    
     toast({
       title: "Payment Successful",
       description: `Successfully upgraded to ${selectedPlan?.name}!`,
