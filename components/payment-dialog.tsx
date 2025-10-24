@@ -5,41 +5,25 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { 
   Loader2, 
-  Copy, 
-  ExternalLink, 
   CheckCircle, 
   AlertCircle, 
-  Clock,
-  RefreshCw,
-  QrCode as QrCodeIcon
+  CreditCard,
+  ExternalLink
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
-import { 
-  paymentApiService, 
-  formatCurrency, 
-  getPaymentStatusColor, 
-  getPaymentStatusText,
-  PaymentStatusPoller
-} from "@/lib/payments"
 import { useAuth } from "@/lib/auth-context"
-import { 
-  PaymentDialogStep, 
-  PaymentStatusType, 
-  PaymentResponse,
-  PaymentStatus
-} from "@/types/payments"
+import { useRouter } from "next/navigation"
+import { exchangeRateAPI } from "@/lib/exchange-rate-api"
 
 // Plan interface from plan page
 interface Plan {
@@ -61,458 +45,325 @@ interface Plan {
   monthlyPrice?: number
   annualPrice?: number
 }
-import QRCode from "qrcode"
 
 interface PaymentDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   selectedPlan: Plan | null
   onPaymentSuccess: () => void
+  invoiceId?: string // Optional invoice ID for invoice payments
 }
 
-const SUPPORTED_CURRENCIES = [
-  { code: 'usdcbase', name: 'USD Coin (Base)', symbol: '$' },
-  { code: 'btc', name: 'Bitcoin', symbol: '₿' },
-  { code: 'eth', name: 'Ethereum', symbol: 'Ξ' },
-  { code: 'usdt', name: 'Tether (USDT)', symbol: '₮' },
-  { code: 'ltc', name: 'Litecoin', symbol: 'Ł' },
-  { code: 'ada', name: 'Cardano', symbol: '₳' },
-  { code: 'matic', name: 'Polygon', symbol: 'Ⓜ' },
-  { code: 'bnb', name: 'BNB', symbol: 'Ⓑ' },
-]
+type PaymentStep = 'confirm' | 'processing' | 'success'
 
-export function PaymentDialog({ open, onOpenChange, selectedPlan, onPaymentSuccess }: PaymentDialogProps) {
-  const [step, setStep] = useState<PaymentDialogStep>('select')
-  const [selectedCurrency, setSelectedCurrency] = useState('usdcbase')
-  const [supportedCurrencies, setSupportedCurrencies] = useState<string[]>([])
-  const [paymentData, setPaymentData] = useState<PaymentResponse | null>(null)
-  const [paymentStatus, setPaymentStatus] = useState<PaymentStatus | null>(null)
-  const [qrCode, setQRCode] = useState('')
+export function PaymentDialog({ open, onOpenChange, selectedPlan, onPaymentSuccess, invoiceId }: PaymentDialogProps) {
+  const [step, setStep] = useState<PaymentStep>('confirm')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [statusPoller, setStatusPoller] = useState<PaymentStatusPoller | null>(null)
-  const [timeRemaining, setTimeRemaining] = useState<number>(0)
+  const [exchangeRate, setExchangeRate] = useState<number | null>(null)
+  const [ngnAmount, setNgnAmount] = useState<number | null>(null)
   
   const { toast } = useToast()
   const { user } = useAuth()
+  const router = useRouter()
+
+  // Fetch exchange rate when component mounts or selectedPlan changes
+  useEffect(() => {
+    if (selectedPlan && Number(selectedPlan.price) > 0) {
+      const fetchExchangeRate = async () => {
+        try {
+          const rate = await exchangeRateAPI.getUSDToNGNRate()
+          const amount = Number(selectedPlan.price) * rate.rate
+          setExchangeRate(rate.rate)
+          setNgnAmount(amount)
+        } catch (error) {
+          console.error('Failed to fetch exchange rate:', error)
+          // Fallback to hardcoded rate
+          const fallbackRate = 1650
+          const amount = Number(selectedPlan.price) * fallbackRate
+          setExchangeRate(fallbackRate)
+          setNgnAmount(amount)
+        }
+      }
+      
+      fetchExchangeRate()
+    }
+  }, [selectedPlan])
+
+  const resetDialog = () => {
+    setStep('confirm')
+    setError(null)
+    setIsLoading(false)
+  }
 
   useEffect(() => {
-    if (open && step === 'select') {
-      loadSupportedCurrencies()
+    if (open) {
       resetDialog()
     }
   }, [open])
 
-  useEffect(() => {
-    // Cleanup poller on unmount or dialog close
-    return () => {
-      if (statusPoller) {
-        statusPoller.stop()
-      }
-    }
-  }, [statusPoller])
-
-  // Timer for payment expiration
-  useEffect(() => {
-    let interval: NodeJS.Timeout
-    
-    if (step === 'payment' && timeRemaining > 0) {
-      interval = setInterval(() => {
-        setTimeRemaining(prev => {
-          if (prev <= 1) {
-            // Payment expired
-            setError('Payment time expired. Please create a new payment.')
-            return 0
-          }
-          return prev - 1
-        })
-      }, 1000)
+  const handlePayWithPaystack = async () => {
+    if (!selectedPlan || !user) {
+      console.error('Missing required data:', { selectedPlan, user })
+      return
     }
 
-    return () => {
-      if (interval) {
-        clearInterval(interval)
-      }
+    if (isLoading) {
+      console.log('Payment already in progress, skipping...')
+      return
     }
-  }, [step, timeRemaining])
-
-  const resetDialog = () => {
-    setStep('select')
-    setPaymentData(null)
-    setPaymentStatus(null)
-    setQRCode('')
-    setError(null)
-    setTimeRemaining(0)
-    if (statusPoller) {
-      statusPoller.stop()
-      setStatusPoller(null)
-    }
-  }
-
-  const loadSupportedCurrencies = async () => {
-    try {
-      const data = await paymentApiService.getSupportedCurrencies()
-      setSupportedCurrencies(data.currencies || [])
-      
-      // Set default currency to first available
-      const availableCurrency = SUPPORTED_CURRENCIES.find(curr => 
-        data.currencies.includes(curr.code)
-      )
-      if (availableCurrency) {
-        setSelectedCurrency(availableCurrency.code)
-      }
-    } catch (error) {
-      console.error('Failed to load supported currencies:', error)
-      // Use default currencies if API fails
-      setSupportedCurrencies(SUPPORTED_CURRENCIES.map(c => c.code))
-    }
-  }
-
-  const handleCreatePayment = async () => {
-    if (!selectedPlan || !selectedCurrency) return
 
     setIsLoading(true)
     setError(null)
     
     try {
-      // Create payment intent
-      const paymentIntent = await paymentApiService.createPaymentIntent(
-        selectedPlan.id,
-        'crypto',
-        selectedPlan.billingFrequency || 'monthly',
-        user?.id
-      )
+      console.log('Initializing Paystack payment for:', {
+        plan: selectedPlan.name,
+        price: selectedPlan.price,
+        user: user.email || user.id
+      })
+      // Create payment initialization request
+      // Convert USD to NGN using dynamic exchange rate from IFA Labs API
+      const amountInNGN = ngnAmount || await exchangeRateAPI.convertUSDToNGNCached(Number(selectedPlan.price));
+      
+      // Determine if this is an invoice payment or subscription payment
+      const isInvoicePayment = !!invoiceId
+      const reference = isInvoicePayment 
+        ? `inv_${invoiceId}_${user.id}_${Date.now()}`
+        : `sub_${selectedPlan.id}_${user.id}_${Date.now()}`
+      
+      const callbackUrl = isInvoicePayment
+        ? `${window.location.origin}/invoices/success?invoiceId=${invoiceId}&userId=${user.id}&amount=${selectedPlan.price}&paymentMethod=paystack`
+        : `${window.location.origin}/subscription/success?plan=${encodeURIComponent(selectedPlan.name)}&billing=${selectedPlan.billingFrequency || 'monthly'}&planId=${selectedPlan.id}&userId=${user.id}&amount=${selectedPlan.price}&paymentMethod=paystack`
 
-      // Create NOWPayments payment
-      const paymentRequest = {
-        price_amount: Number(selectedPlan.price),
-        price_currency: 'USD',
-        pay_currency: selectedCurrency,
-        order_id: paymentIntent.order_id,
-        order_description: `Subscription upgrade to ${selectedPlan.name}`,
-        ipn_callback_url: `${window.location.origin}/api/payments/webhook`,
-        success_url: `${window.location.origin}/subscription/success?plan=${encodeURIComponent(selectedPlan.name)}&billing=${selectedPlan.billingFrequency || 'monthly'}`,
-        cancel_url: `${window.location.origin}/subscription/plans`,
+      const paymentData = {
+        email: user.email || `${user.id}@ifalabs.com`,
+        amount: Math.round(amountInNGN * 100), // Convert to kobo (NGN smallest unit)
+        currency: 'NGN', // Nigerian Naira - default for most Paystack accounts
+        reference: reference,
+        callback_url: callbackUrl,
+        metadata: {
+          plan_id: selectedPlan.id,
+          plan_name: selectedPlan.name,
+          user_id: user.id,
+          billing_frequency: selectedPlan.billingFrequency || 'monthly',
+          invoice_id: invoiceId, // Include invoice ID if this is an invoice payment
+          payment_type: isInvoicePayment ? 'invoice' : 'subscription',
+          custom_fields: [
+            {
+              display_name: isInvoicePayment ? "Invoice" : "Plan",
+              variable_name: isInvoicePayment ? "invoice" : "plan",
+              value: isInvoicePayment ? `Invoice ${invoiceId}` : selectedPlan.name
+            }
+          ]
+        }
       }
 
-      const payment = await paymentApiService.createNOWPayment(paymentRequest)
-      setPaymentData(payment)
-      
-      // Generate QR code for the payment address
-      const qrCodeUrl = await QRCode.toDataURL(payment.pay_address, {
-        width: 200,
-        margin: 1,
-        color: {
-          dark: '#000000',
-          light: '#FFFFFF',
+      console.log('Payment data to be sent:', JSON.stringify(paymentData, null, 2))
+
+      // Validate paymentData before sending
+      if (!paymentData.email || !paymentData.amount || !paymentData.reference) {
+        throw new Error('Invalid payment data: missing required fields')
+      }
+
+      const requestBody = JSON.stringify(paymentData)
+      console.log('Request body length:', requestBody.length)
+
+      // Call our API to initialize Paystack transaction
+      const response = await fetch('/api/payments/paystack/initialize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
+        body: requestBody,
       })
-      setQRCode(qrCodeUrl)
+
+      console.log('API response status:', response.status)
+      console.log('API response ok:', response.ok)
+
+      if (!response.ok) {
+        let errorData;
+        try {
+          errorData = await response.json()
+        } catch (parseError) {
+          const textError = await response.text()
+          console.error('Failed to parse error response:', textError)
+          throw new Error(`Payment initialization failed (${response.status}): ${textError || 'Unknown error'}`)
+        }
+        console.error('Payment initialization error:', errorData)
+        throw new Error(errorData.error || errorData.message || 'Failed to initialize payment')
+      }
+
+      const data = await response.json()
+      console.log('Payment initialization response:', data)
       
-      // Set payment expiration timer (15 minutes)
-      setTimeRemaining(15 * 60)
-      
-      setStep('payment')
-      
-      // Start polling for payment status
-      startStatusPolling(payment.payment_id)
+      // Redirect to Paystack checkout page
+      if (data.authorization_url) {
+        // Store payment reference and plan info
+        localStorage.setItem('pending_payment_reference', data.reference)
+        localStorage.setItem('pending_plan_id', selectedPlan.id)
+        localStorage.setItem('pending_billing_frequency', selectedPlan.billingFrequency || 'monthly')
+        
+        // Redirect to Paystack
+        window.location.href = data.authorization_url
+      } else {
+        throw new Error('No authorization URL received from Paystack')
+      }
       
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Failed to create payment'
+      const errorMessage = error instanceof Error ? error.message : 'Failed to initialize payment'
       setError(errorMessage)
       toast({
         title: "Payment Error",
         description: errorMessage,
         variant: "destructive",
       })
-    } finally {
       setIsLoading(false)
     }
   }
 
-  const startStatusPolling = (paymentId: string) => {
-    const poller = new PaymentStatusPoller({
-      paymentId,
-      onStatusChange: (status: PaymentStatus) => {
-        setPaymentStatus(status)
-        
-        // Update UI based on status
-        if (status.payment_status === 'confirming') {
-          toast({
-            title: "Payment Detected",
-            description: "Your payment is being confirmed on the blockchain.",
-          })
-        }
-      },
-      onComplete: (status: PaymentStatus) => {
-        setPaymentStatus(status)
-        
-        if (status.payment_status === 'confirmed' || status.payment_status === 'finished') {
-          setStep('confirmation')
-          toast({
-            title: "Payment Successful!",
-            description: `Your subscription has been upgraded to ${selectedPlan?.name}.`,
-          })
-          onPaymentSuccess()
-        } else if (status.payment_status === 'failed' || status.payment_status === 'expired') {
-          setError(`Payment ${status.payment_status}. Please try again.`)
-          toast({
-            title: "Payment Failed",
-            description: `Payment ${status.payment_status}. Please create a new payment.`,
-            variant: "destructive",
-          })
-        }
-      },
-      onError: (error: Error) => {
-        console.error('Payment status polling error:', error)
-        setError('Failed to check payment status. Please refresh the page.')
-      },
-      pollInterval: 5000, // 5 seconds
-      maxAttempts: 180, // 15 minutes
-    })
-
-    poller.start()
-    setStatusPoller(poller)
-  }
-
-  const copyToClipboard = async (text: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      toast({
-        title: "Copied!",
-        description: `${label} copied to clipboard`,
-      })
-    } catch (error) {
-      toast({
-        title: "Copy Failed",
-        description: "Please copy manually",
-        variant: "destructive",
-      })
+  const handleClose = () => {
+    if (step !== 'processing') {
+      onOpenChange(false)
     }
   }
-
-  const formatTime = (seconds: number): string => {
-    const minutes = Math.floor(seconds / 60)
-    const remainingSeconds = seconds % 60
-    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
-  }
-
-  const getCurrencyInfo = (code: string) => {
-    return SUPPORTED_CURRENCIES.find(curr => curr.code === code) || {
-      code,
-      name: code.toUpperCase(),
-      symbol: code.toUpperCase(),
-    }
-  }
-
-  const availableCurrencies = SUPPORTED_CURRENCIES.filter(currency => 
-    supportedCurrencies.includes(currency.code)
-  )
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {step === 'select' && 'Choose Payment Method'}
-            {step === 'payment' && 'Complete Payment'}
-            {step === 'confirmation' && 'Payment Successful!'}
+            {step === 'confirm' && (invoiceId ? 'Pay Invoice' : 'Confirm Your Payment')}
+            {step === 'processing' && 'Processing Payment'}
+            {step === 'success' && 'Payment Successful!'}
           </DialogTitle>
           <DialogDescription>
-            {step === 'select' && selectedPlan && `Upgrade to ${selectedPlan.name} plan`}
-            {step === 'payment' && 'Send the exact amount to the address below'}
-            {step === 'confirmation' && 'Your subscription has been upgraded successfully'}
+            {step === 'confirm' && (invoiceId ? 'Review your invoice details' : 'Review your subscription details')}
+            {step === 'processing' && 'Please wait...'}
+            {step === 'success' && (invoiceId ? 'Your invoice has been paid' : 'Your subscription has been activated')}
           </DialogDescription>
         </DialogHeader>
 
-        {error && (
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        {/* Currency Selection Step */}
-        {step === 'select' && (
-          <div className="space-y-4">
-            <div>
-              <label className="text-sm font-medium mb-2 block">
-                Select Cryptocurrency
-              </label>
-              <Select value={selectedCurrency} onValueChange={setSelectedCurrency}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Choose currency" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableCurrencies.map((currency) => (
-                    <SelectItem key={currency.code} value={currency.code}>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs font-bold">
-                          {currency.symbol}
-                        </span>
-                        <span className="uppercase font-mono text-xs">
-                          {currency.code}
-                        </span>
-                        <span>{currency.name}</span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {selectedPlan && (
-              <Card>
-                <CardContent className="pt-4">
-                  <div className="space-y-3">
-                    <div className="flex justify-between">
-                      <span className="text-sm text-muted-foreground">Plan:</span>
-                      <span className="font-medium">{selectedPlan.name}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm text-muted-foreground">Amount:</span>
-                      <span className="font-medium">{selectedPlan.priceDescription}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-sm text-muted-foreground">Payment Method:</span>
-                      <span className="font-medium">
-                        {getCurrencyInfo(selectedCurrency).name}
-                      </span>
-                    </div>
-                    <Separator />
-                    <div className="text-xs text-muted-foreground">
-                      • Instant activation after blockchain confirmation
-                      • No additional fees from our side
-                      • Secure cryptocurrency payment
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        )}
-
-        {/* Payment Step */}
-        {step === 'payment' && paymentData && (
-          <div className="space-y-4">
-            {/* Status Badge */}
-            <div className="text-center">
-              <Badge 
-                variant={
-                  paymentStatus?.payment_status === 'confirmed' || 
-                  paymentStatus?.payment_status === 'finished' ? 'default' :
-                  paymentStatus?.payment_status === 'confirming' ? 'secondary' :
-                  paymentStatus?.payment_status === 'failed' ? 'destructive' : 'outline'
-                }
-                className="text-sm"
-              >
-                {paymentStatus ? 
-                  getPaymentStatusText(paymentStatus.payment_status) : 
-                  'Waiting for Payment'
-                }
-              </Badge>
-            </div>
-
-            {/* Timer */}
-            {timeRemaining > 0 && (
-              <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-                <Clock className="h-4 w-4" />
-                <span>Time remaining: {formatTime(timeRemaining)}</span>
-              </div>
-            )}
-
-            {/* Payment Details */}
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-medium mb-2 block">
-                  Send exactly this amount:
-                </label>
-                <div className="flex gap-2">
-                  <code className="flex-1 p-3 bg-muted rounded text-sm font-bold text-center">
-                    {formatCurrency(paymentData.pay_amount, paymentData.pay_currency)}
-                  </code>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => copyToClipboard(paymentData.pay_amount.toString(), 'Amount')}
-                  >
-                    <Copy className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-sm font-medium mb-2 block">
-                  To this address:
-                </label>
-                <div className="flex gap-2">
-                  <code className="flex-1 p-3 bg-muted rounded text-xs break-all">
-                    {paymentData.pay_address}
-                  </code>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => copyToClipboard(paymentData.pay_address, 'Address')}
-                  >
-                    <Copy className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-
-              {/* QR Code */}
-              {qrCode && (
-                <div className="flex flex-col items-center gap-3">
-                  <img src={qrCode} alt="Payment QR Code" className="h-48 w-48" />
-                  <div className="text-xs text-muted-foreground">Scan to pay</div>
-                </div>
-              )}
-
-              {/* Open payment page */}
-              {paymentData.payment_url && (
-                <Button asChild variant="outline">
-                  <a href={paymentData.payment_url} target="_blank" rel="noopener noreferrer">
-                    Open Payment Page <ExternalLink className="ml-2 h-4 w-4" />
-                  </a>
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* Confirmation Step */}
-        {step === 'confirmation' && (
-          <div className="flex flex-col items-center gap-4 py-6">
-            <CheckCircle className="h-10 w-10 text-green-600" />
-            <div className="text-center space-y-1">
-              <div className="font-semibold">Payment Confirmed</div>
-              <div className="text-sm text-muted-foreground">
-                Your subscription upgrade is now active.
-              </div>
-            </div>
-            <Button onClick={() => onOpenChange(false)}>Close</Button>
+        {step === 'confirm' && selectedPlan && (
+          <div className="space-y-6 py-4">
+            <Card>
+              <CardContent className="pt-6 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-semibold text-lg">{selectedPlan.name}</h3>
+                    <p className="text-sm text-muted-foreground">{selectedPlan.description}</p>
+                  </div>
+                </div>
+                
+                <Separator />
+                
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Amount (USD)</span>
+                    <span className="font-bold text-lg">${selectedPlan.price}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Amount (NGN)</span>
+                    <span className="font-bold text-lg">
+                      ₦{ngnAmount ? ngnAmount.toLocaleString() : 'Loading...'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Billing Cycle</span>
+                    <span className="font-medium">
+                      {selectedPlan.billingFrequency === 'annual' ? 'Annual' : 'Monthly'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Payment Method</span>
+                    <span className="font-medium">Paystack</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Currency</span>
+                    <span className="font-medium">Nigerian Naira (NGN)</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {error && (
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            <Alert>
+              <CreditCard className="h-4 w-4" />
+              <AlertDescription className="text-xs">
+                You will be redirected to Paystack's secure checkout page to complete your payment.
+                We accept cards, bank transfers, and mobile money. Payment will be processed in Nigerian Naira (NGN).
+              </AlertDescription>
+            </Alert>
+            
+            <Alert variant="default">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription className="text-xs">
+                <strong>Exchange Rate:</strong> $1 USD = ₦{exchangeRate ? exchangeRate.toLocaleString() : '1,650'} NGN (live rate from IFA Labs API). 
+                Paystack will show the exact amount in NGN at checkout.
+              </AlertDescription>
+            </Alert>
+
+            <Button 
+              onClick={handlePayWithPaystack} 
+              disabled={isLoading}
+              className="w-full"
+              size="lg"
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Redirecting to Paystack...
+                </>
+              ) : (
+                <>
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  Proceed to Payment
+                </>
+              )}
+            </Button>
           </div>
         )}
 
-        {/* Footer Actions */}
-        <DialogFooter>
-          {step === 'select' && (
-            <Button onClick={handleCreatePayment} disabled={isLoading || !selectedPlan}>
-              {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Continue to Payment
-            </Button>
-          )}
-          {step === 'payment' && (
-            <div className="flex w-full items-center justify-between">
-              <Button variant="outline" onClick={resetDialog}>
-                Cancel
-              </Button>
-              <Button variant="secondary" onClick={() => startStatusPolling(paymentData!.payment_id)}>
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Refresh Status
-              </Button>
+        {/* Processing Step */}
+        {step === 'processing' && (
+          <div className="flex flex-col items-center justify-center py-12 space-y-4">
+            <Loader2 className="h-12 w-12 animate-spin text-primary" />
+            <p className="text-lg font-medium">Processing payment...</p>
+            <p className="text-sm text-muted-foreground text-center max-w-md">
+              Please wait while we confirm your payment with Paystack
+            </p>
+          </div>
+        )}
+
+        {/* Success Step */}
+        {step === 'success' && (
+          <div className="flex flex-col items-center justify-center py-12 space-y-4">
+            <div className="rounded-full bg-green-100 p-3">
+              <CheckCircle className="h-12 w-12 text-green-600" />
             </div>
-          )}
-        </DialogFooter>
+            <h3 className="text-xl font-semibold">Payment Successful!</h3>
+            <p className="text-sm text-muted-foreground text-center max-w-md">
+              {invoiceId 
+                ? `Invoice ${invoiceId} has been paid successfully.`
+                : `Your subscription to ${selectedPlan?.name} has been activated.`
+              }
+            </p>
+            <Button onClick={() => {
+              onPaymentSuccess()
+              onOpenChange(false)
+            }}>
+              Continue
+            </Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )

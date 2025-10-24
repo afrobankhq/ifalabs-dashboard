@@ -42,25 +42,80 @@ function PaymentSuccessContent() {
     const amount = searchParams.get('amount')
     const currency = searchParams.get('currency')
     const transactionHash = searchParams.get('tx_hash')
+    const paystackReference = searchParams.get('reference') || searchParams.get('trxref')
+    const planId = searchParams.get('planId')
 
     if (planName) {
+      console.log('=== PAYMENT SUCCESS PAGE ===')
+      console.log('Plan Name:', planName)
+      console.log('Billing Frequency from URL:', billingFrequency)
+      console.log('Amount:', amount)
+      console.log('Payment Method:', paystackReference ? 'Paystack' : 'Other')
+      
       setPaymentData({
         planName: decodeURIComponent(planName),
         billingFrequency: billingFrequency || 'monthly',
-        paymentId: paymentId || undefined,
+        paymentId: paymentId || paystackReference || undefined,
         amount: amount ? parseFloat(amount) : undefined,
         currency: currency || 'USD',
         transactionHash: transactionHash || undefined,
       })
       
-      // Automatically update subscription plan (only once)
-      updateSubscriptionPlan(planName)
+      console.log('Payment data set:', {
+        planName: decodeURIComponent(planName),
+        billingFrequency: billingFrequency || 'monthly',
+        amount: amount ? parseFloat(amount) : undefined,
+      })
+      
+      // For Paystack payments, verify first before updating
+      if (paystackReference) {
+        console.log('Paystack payment detected, verifying reference:', paystackReference)
+        verifyPaystackPayment(paystackReference, planName, planId)
+      } else {
+        // For other payment methods, update directly
+        updateSubscriptionPlan(planName)
+      }
       setHasUpdatedProfile(true)
     } else {
+      console.error('❌ No plan name in URL parameters! Redirecting to plans page')
       // Redirect to plans page if no plan specified
       router.push('/plan')
     }
   }, [user, searchParams, router, hasUpdatedProfile])
+
+  // Verify Paystack payment before activating subscription
+  const verifyPaystackPayment = async (reference: string, planName: string, planId: string | null) => {
+    try {
+      console.log('Verifying Paystack payment with reference:', reference)
+      
+      const verifyResponse = await fetch(`/api/payments/paystack/verify?reference=${reference}`)
+      
+      if (!verifyResponse.ok) {
+        throw new Error('Payment verification failed')
+      }
+
+      const verificationData = await verifyResponse.json()
+      console.log('Payment verification result:', verificationData)
+      
+      if (verificationData.status === 'success') {
+        console.log('✅ Payment verified successfully, updating subscription')
+        // Use planId from URL if available, otherwise derive from plan name
+        const actualPlanId = planId || (planName ? planName.toLowerCase().replace(' tier', '').replace(' ', '_') : '')
+        updateSubscriptionPlan(planName || actualPlanId)
+      } else {
+        console.error('❌ Payment not successful:', verificationData.status)
+        toast({
+          title: "Payment Verification Failed",
+          description: "Your payment could not be verified. Please contact support.",
+          variant: "destructive",
+        })
+      }
+    } catch (error) {
+      console.error('Error verifying Paystack payment:', error)
+      // Still attempt to update subscription as fallback
+      updateSubscriptionPlan(planName)
+    }
+  }
 
   // Update subscription plan function
   const updateSubscriptionPlan = async (planName: string) => {
@@ -71,9 +126,13 @@ function PaymentSuccessContent() {
       
       const planIdMap: Record<string, string> = {
         'Free Tier': 'free',
-        'Developer Tier': 'developer', 
+        'Free tier': 'free',
+        'Developer Tier': 'developer',
+        'Developer tier': 'developer',
         'Professional Tier': 'professional',
+        'Professional tier': 'professional',
         'Enterprise Tier': 'enterprise',
+        'Enterprise tier': 'enterprise',
       }
       
       const planId = planIdMap[planName] || planName.toLowerCase()
@@ -185,11 +244,11 @@ function PaymentSuccessContent() {
 
         // Setup billing information for paid plans
         if (planId !== 'free') {
-          console.log('Setting up billing information for plan:', planId)
-          setupBillingInformation(planId, planName).catch(err => 
-          console.error('Failed to setup billing information:', err)
-        )
-      }
+          console.log('✅ Plan is paid tier, setting up billing information for:', planId)
+          await setupBillingInformation(planId, planName)
+        } else {
+          console.log('⚠️ Plan is free tier, skipping billing information setup')
+        }
 
     } catch (error) {
       console.error('Error in updateSubscriptionPlan:', error)
@@ -205,17 +264,40 @@ function PaymentSuccessContent() {
 
   // Setup billing information for paid plans
   const setupBillingInformation = async (planId: string, planName: string) => {
-    if (!user || !paymentData) return
+    console.log('=== SETUP BILLING INFORMATION CALLED ===')
+    console.log('User:', user ? user.id : 'null')
+    console.log('Payment Data:', paymentData)
+    
+    if (!user || !paymentData) {
+      console.error('❌ Cannot setup billing - missing user or paymentData')
+      return
+    }
 
     try {
       console.log('Setting up billing information for:', { planId, planName, paymentData })
+      
+      // Store billing frequency and subscription start date separately for easy access
+      const billingFreq = paymentData.billingFrequency || 'monthly'
+      console.log('📝 Saving billing frequency to localStorage:', billingFreq)
+      localStorage.setItem('billing_frequency', billingFreq)
+      localStorage.setItem('subscription_start_date', new Date().toISOString())
+      
+      // Verify it was saved
+      const savedFreq = localStorage.getItem('billing_frequency')
+      console.log('✅ Billing frequency saved to localStorage:', savedFreq)
+      console.log('✅ Verification - Reading back from localStorage:', savedFreq === billingFreq ? 'SUCCESS' : 'FAILED!')
+      
+      // Clean up pending payment data if it exists
+      localStorage.removeItem('pending_payment_reference')
+      localStorage.removeItem('pending_plan_id')
+      localStorage.removeItem('pending_billing_frequency')
       
       // Create a billing record
       const billingData = {
         user_id: user.id,
         plan_id: planId,
         plan_name: planName,
-        billing_frequency: paymentData.billingFrequency || 'monthly',
+        billing_frequency: billingFreq,
         amount: paymentData.amount,
         currency: paymentData.currency || 'USD',
         payment_id: paymentData.paymentId,
@@ -232,9 +314,11 @@ function PaymentSuccessContent() {
       localStorage.setItem('billing_history', JSON.stringify(existingBilling))
       
       console.log('✅ Billing information stored successfully')
+      console.log('✅ Total billing history records:', existingBilling.length)
+      console.log('=== END SETUP BILLING INFORMATION ===')
 
       } catch (error) {
-      console.error('Failed to setup billing information:', error)
+      console.error('❌ Failed to setup billing information:', error)
     }
   }
 

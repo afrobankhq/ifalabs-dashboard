@@ -16,24 +16,42 @@ import {
   Crown,
   Zap,
   ExternalLink,
+  CreditCard,
+  FileText,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { apiService, useApiCall } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { ProtectedRoute } from "@/components/protected-route"
+import { PaymentDialog } from "@/components/payment-dialog"
 
-interface Invoice {
+interface BackendInvoice {
   id: string
-  date: string
-  amount: number
-  status: "paid" | "pending" | "failed"
-  description: string
-  downloadUrl: string
-  billingPeriod: {
-    start: string
-    end: string
+  invoice_number: string
+  account_id: string
+  amount: number // Amount in cents
+  currency: string
+  due_date: string
+  issued_at: string
+  status: 'pending' | 'paid' | 'failed' | 'void'
+  metadata: {
+    plan_id?: string
+    billing_cycle?: string
+    payment_method?: string
+    subscription_id?: string
+    created_from?: string
   }
-  nextBillingDate?: string
+  paid_at?: string
+  payment_id?: string
+  created_at: string
+  updated_at: string
+}
+
+interface InvoiceListResponse {
+  invoices: BackendInvoice[]
+  total_count: number
+  page: number
+  page_size: number
 }
 
 interface Plan {
@@ -85,95 +103,51 @@ const calculateNextBillingDate = (billingFrequency: 'monthly' | 'annual', subscr
   })
 }
 
-// Helper function to generate invoices based on actual billing history
-const generateInvoices = (plan: Plan, billingHistory: any[] = []): Invoice[] => {
-  if (plan.id === 'free') return []
-  
-  const invoices: Invoice[] = []
-  const billingFrequency = plan.billingFrequency || 'monthly'
-  const planPrice = typeof plan.price === 'number' ? plan.price : 0
-  
-  // Only show actual payments from billing history
-  billingHistory.forEach((bill, index) => {
-    const billDate = new Date(bill.created_at || bill.date)
-    const nextBillingDate = new Date(billDate)
-    
-    // Calculate billing period
-    if (billingFrequency === 'monthly') {
-      nextBillingDate.setMonth(nextBillingDate.getMonth() + 1)
-    } else {
-      nextBillingDate.setFullYear(nextBillingDate.getFullYear() + 1)
-    }
-    
-    const billingPeriodEnd = new Date(nextBillingDate)
-    billingPeriodEnd.setDate(billingPeriodEnd.getDate() - 1)
-    
-    const invoice: Invoice = {
-      id: `INV-${String(index + 1).padStart(3, '0')}`,
-      date: billDate.toISOString().split('T')[0],
-      amount: bill.amount || planPrice,
-      status: bill.status || "paid",
-      description: `${plan.name} - ${billDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
-      downloadUrl: "#",
-      billingPeriod: {
-        start: billDate.toISOString().split('T')[0],
-        end: billingPeriodEnd.toISOString().split('T')[0]
+// Helper function to update plan pricing based on billing frequency (from plan page)
+const updatePlanPricing = (plans: Plan[], frequency: 'monthly' | 'annual') => {
+  return plans.map(plan => {
+    if (plan.id === 'free') {
+      return {
+        ...plan,
+        price: 0,
+        priceDescription: "$0",
+        billingFrequency: frequency
       }
     }
     
-    invoices.push(invoice)
+    if (plan.id === 'enterprise') {
+      return {
+        ...plan,
+        price: -1,
+        priceDescription: "Custom",
+        billingFrequency: frequency
+      }
+    }
+
+    const monthlyPrice = plan.monthlyPrice ?? 0
+    const annualPrice = plan.annualPrice ?? 0
+    const price = frequency === 'monthly' ? monthlyPrice : annualPrice
+    const priceDescription = frequency === 'monthly' ? `$${monthlyPrice}` : `$${annualPrice}`
+    
+    return {
+      ...plan,
+      price,
+      priceDescription,
+      billingFrequency: frequency
+    }
   })
-  
-  // Add next upcoming invoice based on last payment
-  if (billingHistory.length > 0) {
-    const lastBill = billingHistory[billingHistory.length - 1]
-    const lastBillDate = new Date(lastBill.created_at || lastBill.date)
-    const nextBillingDate = new Date(lastBillDate)
-    
-    if (billingFrequency === 'monthly') {
-      nextBillingDate.setMonth(nextBillingDate.getMonth() + 1)
-    } else {
-      nextBillingDate.setFullYear(nextBillingDate.getFullYear() + 1)
-    }
-    
-    const now = new Date()
-    // Only show upcoming invoice if next billing date is in the future
-    if (nextBillingDate > now) {
-      const billingPeriodEnd = new Date(nextBillingDate)
-      if (billingFrequency === 'monthly') {
-        billingPeriodEnd.setMonth(billingPeriodEnd.getMonth() + 1)
-      } else {
-        billingPeriodEnd.setFullYear(billingPeriodEnd.getFullYear() + 1)
-      }
-      billingPeriodEnd.setDate(billingPeriodEnd.getDate() - 1)
-      
-      const upcomingInvoice: Invoice = {
-        id: `INV-${String(billingHistory.length + 1).padStart(3, '0')}`,
-        date: nextBillingDate.toISOString().split('T')[0],
-        amount: planPrice,
-        status: "pending",
-        description: `${plan.name} - ${nextBillingDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
-        downloadUrl: "#",
-        billingPeriod: {
-          start: nextBillingDate.toISOString().split('T')[0],
-          end: billingPeriodEnd.toISOString().split('T')[0]
-        },
-        nextBillingDate: nextBillingDate.toISOString().split('T')[0]
-      }
-      
-      invoices.push(upcomingInvoice)
-    }
-  }
-  
-  return invoices.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
 }
+
 
 export default function BillingPage() {
   const router = useRouter()
   const [billingInfo, setBillingInfo] = useState<any>(null)
-  const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [invoices, setInvoices] = useState<BackendInvoice[]>([])
   const [currentPlan, setCurrentPlan] = useState<Plan | null>(null)
   const [isFreeTier, setIsFreeTier] = useState(false)
+  const [selectedInvoice, setSelectedInvoice] = useState<BackendInvoice | null>(null)
+  const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false)
+  const [plans, setPlans] = useState<Plan[]>([])
   const { toast } = useToast()
   const { execute: executeApiCall, loading, error } = useApiCall()
   const { user } = useAuth()
@@ -245,44 +219,61 @@ export default function BillingPage() {
     try {
       console.log('Loading billing data for user:', user?.id)
       
-      // Load current plan from company profile
+      // Load current plan from company profile (same logic as plan page)
       let resolvedPlanId: string | null = null
       let profile: any = null
       
       // First, check for direct subscription plan in localStorage
       const directPlan = localStorage.getItem('subscription_plan')
       if (directPlan && directPlan !== 'free') {
-        console.log('Using direct subscription plan from localStorage:', directPlan)
+        console.log('Billing page - Using direct subscription plan from localStorage:', directPlan)
         resolvedPlanId = directPlan.toLowerCase()
       }
       
       try {
         profile = user ? await executeApiCall(() => apiService.getCompanyProfile(user.id)) : null
-        console.log('Profile loaded from API:', profile)
+        console.log('Billing page - Profile loaded from API:', JSON.stringify(profile, null, 2))
         
         if (profile && typeof profile === 'object') {
-          const subscriptionPlan = profile.subscription_plan || profile.plan || profile.subscription
-          const planId = String(subscriptionPlan || '').toLowerCase()
-          resolvedPlanId = planId || resolvedPlanId
-          console.log('Resolved plan ID from API profile:', resolvedPlanId, 'from subscription plan:', subscriptionPlan)
+          // Try multiple possible field names for the subscription plan
+          const subscriptionPlan = profile.subscription_plan || 
+                                   profile.plan || 
+                                   profile.subscription ||
+                                   profile.tier ||
+                                   profile.plan_id
+          const planId = String(subscriptionPlan || '').toLowerCase().trim()
+          
+          // Only use API profile if it has a valid plan
+          if (planId && planId !== '' && planId !== 'null' && planId !== 'undefined') {
+            resolvedPlanId = planId
+          }
+          console.log('Billing page - Resolved plan ID from API profile:', resolvedPlanId, 'from subscription plan:', subscriptionPlan)
         }
       } catch (e) {
-        console.error('Failed to load profile from API:', e)
+        console.error('Billing page - Failed to load profile from API:', e)
         // Try to get profile from localStorage as fallback
         try {
           const storedProfile = localStorage.getItem('user_profile')
           if (storedProfile) {
             profile = JSON.parse(storedProfile)
-            console.log('Profile loaded from localStorage:', profile)
+            console.log('Billing page - Profile loaded from localStorage:', JSON.stringify(profile, null, 2))
             if (profile && typeof profile === 'object') {
-              const subscriptionPlan = profile.subscription_plan || profile.plan || profile.subscription
-              const planId = String(subscriptionPlan || '').toLowerCase()
-              resolvedPlanId = planId || resolvedPlanId
-              console.log('Resolved plan ID from localStorage profile:', resolvedPlanId, 'from subscription plan:', subscriptionPlan)
+              const subscriptionPlan = profile.subscription_plan || 
+                                       profile.plan || 
+                                       profile.subscription ||
+                                       profile.tier ||
+                                       profile.plan_id
+              const planId = String(subscriptionPlan || '').toLowerCase().trim()
+              
+              // Only use localStorage profile if it has a valid plan
+              if (planId && planId !== '' && planId !== 'null' && planId !== 'undefined') {
+                resolvedPlanId = planId
+              }
+              console.log('Billing page - Resolved plan ID from localStorage profile:', resolvedPlanId, 'from subscription plan:', subscriptionPlan)
             }
           }
         } catch (localError) {
-          console.error('Failed to load profile from localStorage:', localError)
+          console.error('Billing page - Failed to load profile from localStorage:', localError)
         }
       }
 
@@ -290,14 +281,14 @@ export default function BillingPage() {
       const defaultPlans: Plan[] = [
         {
           id: "free",
-          name: "Free Tier",
+          name: "Free tier",
           price: 0,
           priceDescription: "$0",
           description: "Perfect for getting started and testing our API",
           features: {
-            dataAccess: "All feeds",
+            dataAccess: "Two feeds",
             apiRequests: "1,000 reqs/month",
-            rateLimit: "30 seconds",
+            rateLimit: "10 reqs/hour",
             requestCall: "$0.00000",
             support: "Email & Community"
           },
@@ -307,49 +298,49 @@ export default function BillingPage() {
         },
         {
           id: "developer",
-          name: "Developer Tier",
-          price: 500, // Annual price (2 months free)
-          priceDescription: "$500",
+          name: "Developer tier",
+          price: 50, // Monthly price
+          priceDescription: "$50",
           description: "Great for developers building applications",
           features: {
             dataAccess: "All feeds",
             apiRequests: "10,000 reqs/month",
-            rateLimit: "10 seconds",
+            rateLimit: "100 reqs/hour",
             requestCall: "$0.0005",
             support: "24/7 support"
           },
           popular: true,
-          billingFrequency: 'annual',
+          billingFrequency: 'monthly',
           monthlyPrice: 50,
           annualPrice: 500,
         },
         {
           id: "professional",
-          name: "Professional Tier",
-          price: 1000, // Annual price (2 months free)
-          priceDescription: "$1,000",
+          name: "Professional tier",
+          price: 100, // Monthly price
+          priceDescription: "$100",
           description: "For growing businesses with higher demands",
           features: {
             dataAccess: "All feeds + Historical data",
             apiRequests: "100,000 reqs/month",
-            rateLimit: "2 seconds",
+            rateLimit: "500 reqs/hour",
             requestCall: "$0.0002",
             support: "24/7 support"
           },
-          billingFrequency: 'annual',
+          billingFrequency: 'monthly',
           monthlyPrice: 100,
           annualPrice: 1000,
         },
         {
           id: "enterprise",
-          name: "Enterprise Tier",
+          name: "Enterprise tier",
           price: -1,
           priceDescription: "Custom",
           description: "For large organizations with custom requirements",
           features: {
             dataAccess: "All feeds + Private",
             apiRequests: "Unlimited (custom SLA)",
-            rateLimit: "Custom",
+            rateLimit: "Unlimited",
             requestCall: "Custom",
             support: "24/7 support + dedicated engineer"
           },
@@ -359,59 +350,56 @@ export default function BillingPage() {
         },
       ]
 
+      // Get billing frequency from localStorage (same as plan page)
+      const billingFrequency = (localStorage.getItem('billing_frequency') as 'monthly' | 'annual') || 'monthly'
+      console.log('Billing page - Using billing frequency:', billingFrequency)
+
       const matchedPlan = resolvedPlanId
         ? defaultPlans.find(p => p.id === resolvedPlanId) || defaultPlans.find(p => p.id === 'free')
-        : defaultPlans.find(p => p.id === 'free')
+        : null
 
-      console.log('Matched plan:', matchedPlan)
-      console.log('Is free tier:', matchedPlan?.id === 'free')
+      console.log('Billing page - Matched plan:', matchedPlan)
+      console.log('Billing page - Is free tier:', matchedPlan?.id === 'free')
 
-      let displayPlan: Plan | null = null
       if (matchedPlan) {
-        // Get the actual billing frequency from localStorage
-        const actualBillingFrequency = localStorage.getItem('billing_frequency') as 'monthly' | 'annual' | null
-        const planToDisplay = { ...matchedPlan, current: true }
-        
-        if (matchedPlan.id !== 'free' && actualBillingFrequency) {
-          // Use the actual billing frequency that was selected during payment
-          planToDisplay.billingFrequency = actualBillingFrequency
-          
-          if (actualBillingFrequency === 'monthly') {
-            planToDisplay.price = matchedPlan.monthlyPrice || 0
-            planToDisplay.priceDescription = `$${matchedPlan.monthlyPrice || 0}`
-          } else {
-            planToDisplay.price = matchedPlan.annualPrice || 0
-            planToDisplay.priceDescription = `$${matchedPlan.annualPrice || 0}`
-          }
-        }
-        
-        displayPlan = planToDisplay
-        setCurrentPlan(displayPlan)
+        const updatedPlan = { ...matchedPlan, current: true, billingFrequency }
+        setCurrentPlan(updatedPlan)
+        setPlans(prevPlans => {
+          const updatedPlans = prevPlans.map(plan => ({ ...plan, current: plan.id === matchedPlan!.id }))
+          return updatePlanPricing(updatedPlans, billingFrequency)
+        })
         setIsFreeTier(matchedPlan.id === 'free')
-        console.log('Set current plan to:', matchedPlan.name, 'Free tier:', matchedPlan.id === 'free', 'Billing frequency:', displayPlan.billingFrequency)
+        console.log('Billing page - Set current plan to:', matchedPlan.name)
       }
 
-      // Only load billing info and invoices for paid plans
+      // Load invoices from backend for all users (including free tier)
+      try {
+        const invoiceResponse = await executeApiCall(() => apiService.getInvoices(user!.id))
+        
+        if (invoiceResponse && typeof invoiceResponse === 'object' && 'invoices' in invoiceResponse) {
+          const invoiceData = invoiceResponse as InvoiceListResponse
+          setInvoices(invoiceData.invoices || [])
+          console.log('Loaded invoices from backend:', invoiceData.invoices?.length || 0)
+          } else {
+          // Handle case where response is directly an array
+          setInvoices(Array.isArray(invoiceResponse) ? invoiceResponse : [])
+          console.log('Loaded invoices from backend (array format):', Array.isArray(invoiceResponse) ? invoiceResponse.length : 0)
+        }
+      } catch (err) {
+        console.error('Failed to load invoices from backend:', err)
+        setInvoices([])
+      }
+
+      // Only load billing info for paid plans
       if (matchedPlan && matchedPlan.id !== 'free') {
         // Load billing info
         const billingData = await executeApiCall(() => apiService.getBillingInfo())
         if (billingData) {
           setBillingInfo(billingData)
         }
-
-        // Get billing history from localStorage - this contains actual payment records
-        const billingHistory = JSON.parse(localStorage.getItem('billing_history') || '[]')
-        
-        // Generate invoices based only on actual billing history
-        const generatedInvoices = generateInvoices(displayPlan!, billingHistory)
-        setInvoices(generatedInvoices)
-        
-        console.log('Generated invoices:', generatedInvoices.length, 'for plan:', matchedPlan.name)
-        console.log('Billing history records:', billingHistory.length)
       } else {
         // Clear billing data for free tier
         setBillingInfo(null)
-        setInvoices([])
       }
     } catch (err) {
       console.error('Failed to load billing data:', err)
@@ -440,16 +428,45 @@ export default function BillingPage() {
     }
   }
 
-  const handleViewInvoice = (invoiceId: string) => {
-    router.push(`/invoice/${invoiceId}`)
+  const handleViewInvoice = (invoice: BackendInvoice) => {
+    router.push(`/invoices`)
   }
 
-  const handleDownloadInvoice = async (invoice: Invoice) => {
+  const handlePayInvoice = (invoice: BackendInvoice) => {
+    if (invoice.status !== 'pending') {
+      toast({
+        title: "Cannot Pay Invoice",
+        description: "This invoice is not in pending status.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setSelectedInvoice(invoice)
+    setIsPaymentDialogOpen(true)
+  }
+
+  const handlePaymentSuccess = () => {
+    if (selectedInvoice) {
+      toast({
+        title: "Payment Successful",
+        description: `Invoice ${selectedInvoice.invoice_number} has been paid successfully!`,
+      })
+      
+      // Reload invoices to reflect the updated status
+      loadBillingData()
+    }
+    
+    setIsPaymentDialogOpen(false)
+    setSelectedInvoice(null)
+  }
+
+  const handleDownloadInvoice = async (invoice: BackendInvoice) => {
     try {
       await executeApiCall(() => apiService.downloadInvoice(invoice.id))
       toast({
         title: "Download Started",
-        description: `Downloading invoice ${invoice.id}...`,
+        description: `Downloading invoice ${invoice.invoice_number}...`,
       })
     } catch (err) {
       toast({
@@ -458,6 +475,22 @@ export default function BillingPage() {
         variant: "destructive",
       })
     }
+  }
+
+  const formatAmount = (amountInCents: number, currency: string) => {
+    const amount = amountInCents / 100
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: currency.toUpperCase(),
+    }).format(amount)
+  }
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    })
   }
 
   const getStatusColor = (status: string) => {
@@ -516,14 +549,13 @@ export default function BillingPage() {
               <div className="text-right">
                 <div className="text-2xl font-bold">{currentPlan.priceDescription}</div>
                 <div className="text-sm text-muted-foreground">
-                  {Number(currentPlan.price) === 0 ? 'Free Forever' : 
+                  {currentPlan.price === 0 ? 'Free Forever' : 
                    currentPlan.billingFrequency === 'annual' ? 'per year' : 'per month'}
                 </div>
               </div>
             </div>
             
-            {/* Billing Cycle Information - Same as plan page */}
-            <div className="space-y-2 pt-4 border-t">
+            <div className="space-y-2">
               <div className="flex justify-between text-sm">
                 <span>Next billing date</span>
                 <span className="font-medium">
@@ -561,65 +593,47 @@ export default function BillingPage() {
         </Card>
       )}
 
-      {/* Billing Overview - Only show for paid plans */}
-      {!isFreeTier && (
-        <div className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Current Balance</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">${billingInfo?.currentBalance?.toFixed(2) || '0.00'}</div>
-            <p className="text-xs text-muted-foreground">{billingInfo?.balanceStatus || 'No outstanding balance'}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Next Payment</CardTitle>
-            <Calendar className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">${billingInfo?.nextPayment?.amount?.toFixed(2) || '0.00'}</div>
-            <p className="text-xs text-muted-foreground">Due {billingInfo?.nextPayment?.date || 'N/A'}</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">This Month</CardTitle>
-            <Receipt className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">${billingInfo?.monthlyUsage?.toFixed(2) || '0.00'}</div>
-            <p className="text-xs text-muted-foreground">{billingInfo?.planName || 'No active plan'}</p>
-          </CardContent>
-        </Card>
-        </div>
-      )}
-
-      {/* Invoice History - Only show for paid plans */}
-      {!isFreeTier && (
+     
+      {/* Invoice History - Show for all users */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Receipt className="h-5 w-5" />
             Invoice History
           </CardTitle>
-          <CardDescription>View and download your past invoices</CardDescription>
+          <CardDescription>
+            {invoices.length === 0 
+              ? "No invoices found. Invoices will appear here when payments are made or generated."
+              : "View and manage your invoices"
+            }
+          </CardDescription>
         </CardHeader>
         <CardContent>
+          {invoices.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12">
+              <FileText className="h-12 w-12 text-muted-foreground mb-4" />
+              <h3 className="text-lg font-semibold mb-2">No invoices found</h3>
+              <p className="text-muted-foreground text-center mb-4">
+                You don't have any invoices yet. Invoices will appear here when you make payments or when they are generated for your subscription.
+              </p>
+              {isFreeTier && (
+                <Button onClick={() => router.push('/plan')}>
+                  <Zap className="mr-2 h-4 w-4" />
+                  Upgrade to Paid Plan
+                </Button>
+              )}
+            </div>
+          ) : (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Invoice</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Billing Period</TableHead>
-                <TableHead>Description</TableHead>
+                  <TableHead>Invoice Number</TableHead>
+                  <TableHead>Issued Date</TableHead>
+                  <TableHead>Due Date</TableHead>
+                  <TableHead>Plan</TableHead>
                 <TableHead>Amount</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead className="w-[70px]"></TableHead>
+                  <TableHead className="w-[120px]">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -629,34 +643,52 @@ export default function BillingPage() {
                     <Button 
                       variant="link" 
                       className="p-0 h-auto font-medium"
-                      onClick={() => handleViewInvoice(invoice.id)}
+                        onClick={() => handleViewInvoice(invoice)}
                     >
-                      {invoice.id}
+                        {invoice.invoice_number}
                     </Button>
                   </TableCell>
-                  <TableCell>{new Date(invoice.date).toLocaleDateString()}</TableCell>
+                    <TableCell>{formatDate(invoice.issued_at)}</TableCell>
+                    <TableCell>{formatDate(invoice.due_date)}</TableCell>
                   <TableCell>
                     <div className="text-sm">
-                      <div>{new Date(invoice.billingPeriod.start).toLocaleDateString()}</div>
-                      <div className="text-muted-foreground">to</div>
-                      <div>{new Date(invoice.billingPeriod.end).toLocaleDateString()}</div>
+                        <div className="font-medium capitalize">
+                          {invoice.metadata?.plan_id || 'Unknown'}
+                        </div>
+                        <div className="text-muted-foreground capitalize">
+                          {invoice.metadata?.billing_cycle || 'N/A'}
+                        </div>
                     </div>
                   </TableCell>
-                  <TableCell>{invoice.description}</TableCell>
-                  <TableCell>${invoice.amount.toFixed(2)}</TableCell>
+                    <TableCell className="font-medium">
+                      {formatAmount(invoice.amount, invoice.currency)}
+                    </TableCell>
                   <TableCell>
-                    <Badge className={getStatusColor(invoice.status)}>{invoice.status}</Badge>
+                      <Badge className={getStatusColor(invoice.status)}>
+                        {invoice.status}
+                      </Badge>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">
                       <Button 
                         variant="ghost" 
                         size="sm" 
-                        onClick={() => handleViewInvoice(invoice.id)}
+                          onClick={() => handleViewInvoice(invoice)}
                         title="View Invoice"
                       >
                         <ExternalLink className="h-4 w-4" />
                       </Button>
+                        {invoice.status === 'pending' && (
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            onClick={() => handlePayInvoice(invoice)}
+                            title="Pay Invoice"
+                            className="text-green-600 hover:text-green-700"
+                          >
+                            <CreditCard className="h-4 w-4" />
+                          </Button>
+                        )}
                       <Button 
                         variant="ghost" 
                         size="sm" 
@@ -671,48 +703,68 @@ export default function BillingPage() {
               ))}
             </TableBody>
           </Table>
+          )}
         </CardContent>
       </Card>
-      )}
 
-      {/* Billing Alerts - Only show for paid plans */}
-      {!isFreeTier && (billingInfo?.nextPayment || invoices.some(inv => inv.nextBillingDate)) && (
+      {/* Billing Alerts - Show pending invoices */}
+      {invoices.some(inv => inv.status === 'pending') && (
       <Card className="border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950/10">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-yellow-800 dark:text-yellow-200">
             <AlertCircle className="h-5 w-5" />
-            Billing Alerts
+              Pending Invoices
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-yellow-700 dark:text-yellow-300">
-            {billingInfo?.nextPayment ? (
-              <>Your next payment of ${billingInfo.nextPayment.amount?.toFixed(2) || '0.00'} will be automatically charged to your default payment method on {billingInfo.nextPayment.date ? new Date(billingInfo.nextPayment.date).toLocaleDateString('en-US', { 
-                year: 'numeric', 
-                month: 'long', 
-                day: 'numeric' 
-              }) : 'N/A'}.</>
-            ) : (
-              (() => {
-                const nextInvoice = invoices.find(inv => inv.nextBillingDate)
-                const planPrice = currentPlan?.price
-                const billingFrequency = currentPlan?.billingFrequency || 'monthly'
-                const nextDate = nextInvoice?.nextBillingDate
-                
-                if (nextDate && planPrice && typeof planPrice === 'number') {
-                  return <>Your next {billingFrequency} payment of ${planPrice.toFixed(2)} will be automatically charged on {new Date(nextDate).toLocaleDateString('en-US', { 
-                    year: 'numeric', 
-                    month: 'long', 
-                    day: 'numeric' 
-                  })}.</>
-                }
-                return <>Your next billing cycle information will be available soon.</>
-              })()
-            )}
-          </p>
+            <div className="space-y-2">
+              {invoices
+                .filter(inv => inv.status === 'pending')
+                .map(invoice => (
+                  <div key={invoice.id} className="flex items-center justify-between p-3 bg-white dark:bg-gray-800 rounded-lg border">
+                    <div>
+                      <p className="font-medium">{invoice.invoice_number}</p>
+                      <p className="text-sm text-muted-foreground">
+                        Due {formatDate(invoice.due_date)} • {formatAmount(invoice.amount, invoice.currency)}
+                      </p>
+                    </div>
+                    <Button 
+                      size="sm" 
+                      onClick={() => handlePayInvoice(invoice)}
+                      className="bg-green-600 hover:bg-green-700"
+                    >
+                      <CreditCard className="mr-2 h-4 w-4" />
+                      Pay Now
+                    </Button>
+                  </div>
+                ))}
+            </div>
         </CardContent>
       </Card>
       )}
+
+      {/* Payment Dialog */}
+      <PaymentDialog
+        open={isPaymentDialogOpen}
+        onOpenChange={setIsPaymentDialogOpen}
+        selectedPlan={selectedInvoice ? {
+          id: selectedInvoice.metadata?.plan_id || 'unknown',
+          name: `${selectedInvoice.metadata?.plan_id || 'Unknown'} Plan`,
+          price: selectedInvoice.amount / 100,
+          priceDescription: formatAmount(selectedInvoice.amount, selectedInvoice.currency),
+          description: `Payment for invoice ${selectedInvoice.invoice_number}`,
+          features: {
+            dataAccess: 'N/A',
+            apiRequests: 'N/A',
+            rateLimit: 'N/A',
+            requestCall: 'N/A',
+            support: 'N/A'
+          },
+          billingFrequency: selectedInvoice.metadata?.billing_cycle as 'monthly' | 'annual' || 'monthly'
+        } : null}
+        onPaymentSuccess={handlePaymentSuccess}
+        invoiceId={selectedInvoice?.id}
+      />
       </div>
     </ProtectedRoute>
   )
