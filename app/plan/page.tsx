@@ -62,8 +62,8 @@ const defaultPlans: Plan[] = [
   {
     id: "developer",
     name: "Developer tier",
-    price: 5, // Monthly price
-    priceDescription: "$5",
+    price: 50, // Monthly price
+    priceDescription: "$50",
     description: "Great for developers building applications",
     features: {
       dataAccess: "All feeds",
@@ -74,7 +74,7 @@ const defaultPlans: Plan[] = [
     },
     popular: true,
     billingFrequency: 'monthly',
-    monthlyPrice: 5,
+    monthlyPrice: 50,
     annualPrice: 500,
   },
   {
@@ -158,6 +158,22 @@ export default function PlanPage() {
   useEffect(() => {
     if (!user) return
     loadPlanData()
+  }, [user])
+
+  // Reload plan data when page becomes visible (e.g., after payment redirect)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && user) {
+        console.log('Page became visible, reloading plan data')
+        loadPlanData()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
   }, [user])
 
   // Initialize plans with correct pricing based on billing frequency
@@ -250,12 +266,21 @@ export default function PlanPage() {
       
       try {
         profile = user ? await executeApiCall(() => apiService.getCompanyProfile(user.id)) : null
-        console.log('Plan page - Profile loaded from API:', profile)
+        console.log('Plan page - Profile loaded from API:', JSON.stringify(profile, null, 2))
         
         if (profile && typeof profile === 'object') {
-          const subscriptionPlan = profile.subscription_plan || profile.plan || profile.subscription
-          const planId = String(subscriptionPlan || '').toLowerCase()
-          resolvedPlanId = planId || resolvedPlanId
+          // Try multiple possible field names for the subscription plan
+          const subscriptionPlan = profile.subscription_plan || 
+                                   profile.plan || 
+                                   profile.subscription ||
+                                   profile.tier ||
+                                   profile.plan_id
+          const planId = String(subscriptionPlan || '').toLowerCase().trim()
+          
+          // Only use API profile if it has a valid plan
+          if (planId && planId !== '' && planId !== 'null' && planId !== 'undefined') {
+            resolvedPlanId = planId
+          }
           console.log('Plan page - Resolved plan ID from API profile:', resolvedPlanId, 'from subscription plan:', subscriptionPlan)
         }
       } catch (e) {
@@ -265,11 +290,19 @@ export default function PlanPage() {
           const storedProfile = localStorage.getItem('user_profile')
           if (storedProfile) {
             profile = JSON.parse(storedProfile)
-            console.log('Plan page - Profile loaded from localStorage:', profile)
+            console.log('Plan page - Profile loaded from localStorage:', JSON.stringify(profile, null, 2))
             if (profile && typeof profile === 'object') {
-              const subscriptionPlan = profile.subscription_plan || profile.plan || profile.subscription
-              const planId = String(subscriptionPlan || '').toLowerCase()
-              resolvedPlanId = planId || resolvedPlanId
+              const subscriptionPlan = profile.subscription_plan || 
+                                       profile.plan || 
+                                       profile.subscription ||
+                                       profile.tier ||
+                                       profile.plan_id
+              const planId = String(subscriptionPlan || '').toLowerCase().trim()
+              
+              // Only use localStorage profile if it has a valid plan
+              if (planId && planId !== '' && planId !== 'null' && planId !== 'undefined') {
+                resolvedPlanId = planId
+              }
               console.log('Plan page - Resolved plan ID from localStorage profile:', resolvedPlanId, 'from subscription plan:', subscriptionPlan)
             }
           }
@@ -351,17 +384,24 @@ export default function PlanPage() {
     setIsUpgradeDialogOpen(true)
   }
 
-  const handlePaymentMethodSelect = (method: 'crypto' | 'traditional') => {
-    setPaymentMethod(method)
+  const handlePaymentMethodSelect = (method: 'crypto' | 'traditional' | 'paystack') => {
+    setPaymentMethod(method as 'crypto' | 'traditional')
     setIsUpgradeDialogOpen(false)
     
-    if (method === 'crypto') {
+    if (method === 'paystack') {
       setIsPaymentDialogOpen(true)
-    } else {
-      // Handle traditional payment methods (Stripe, etc.)
+    } else if (method === 'crypto') {
+      // Crypto payments coming soon
       toast({
         title: "Coming Soon",
-        description: "Traditional payment methods will be available soon. Please use cryptocurrency for now.",
+        description: "Cryptocurrency payments will be available soon. Please use Paystack for now.",
+        variant: "default",
+      })
+    } else {
+      // Handle other traditional payment methods
+      toast({
+        title: "Coming Soon",
+        description: "Other payment methods will be available soon. Please use Paystack.",
         variant: "default",
       })
     }
@@ -715,16 +755,16 @@ export default function PlanPage() {
           <div className="grid gap-4">
             <Card 
               className="cursor-pointer hover:bg-accent transition-colors border-2 hover:border-primary"
-              onClick={() => handlePaymentMethodSelect('crypto')}
+              onClick={() => handlePaymentMethodSelect('paystack')}
             >
               <CardContent className="flex items-center gap-4 pt-4">
                 <div className="p-2 bg-primary/10 rounded-full">
                   <CreditCard className="h-6 w-6 text-primary" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="font-semibold">Cryptocurrency</h3>
+                  <h3 className="font-semibold">Pay with Paystack</h3>
                   <p className="text-sm text-muted-foreground">
-                    Pay with Bitcoin, Ethereum, USDT, or other cryptocurrencies
+                    Pay with debit card, bank transfer, or mobile money
                   </p>
                   <Badge variant="secondary" className="mt-1">Instant Activation</Badge>
                 </div>
@@ -733,16 +773,16 @@ export default function PlanPage() {
             
             <Card 
               className="cursor-pointer hover:bg-accent transition-colors border-2 opacity-50"
-              onClick={() => handlePaymentMethodSelect('traditional')}
+              onClick={() => {}}
             >
               <CardContent className="flex items-center gap-4 pt-4">
                 <div className="p-2 bg-muted rounded-full">
                   <CreditCard className="h-6 w-6 text-muted-foreground" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="font-semibold text-muted-foreground">Credit Card / Bank</h3>
+                  <h3 className="font-semibold text-muted-foreground">Cryptocurrency</h3>
                   <p className="text-sm text-muted-foreground">
-                    Traditional payment methods (Coming Soon)
+                    Pay with Bitcoin, Ethereum, USDT, or other cryptocurrencies
                   </p>
                   <Badge variant="outline" className="mt-1">Coming Soon</Badge>
                 </div>

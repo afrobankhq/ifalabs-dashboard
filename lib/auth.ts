@@ -67,13 +67,32 @@ class AuthService {
         if (contentType.includes('application/json')) {
           const errJson = await resp.json()
           console.log('[Auth] Error response:', errJson)
-          attempts.push(`${resp.status} ${resp.statusText} at ${url} (${errJson?.message || 'json error'})`)
+          
+          // Extract error message from various possible fields
+          const errorMessage = errJson?.error || errJson?.message || errJson?.detail || 'json error'
+          
+          // For authentication failures (401), throw immediately with user-friendly message
+          if (resp.status === 401) {
+            throw new Error('Authentication failed: invalid credentials, either your username or password is incorrect. Please try again')
+          }
+          
+          attempts.push(`${resp.status} ${resp.statusText} at ${url} (${errorMessage})`)
         } else {
           const errText = await resp.text()
           console.log('[Auth] Error text:', errText)
+          
+          // For authentication failures (401), throw immediately with user-friendly message
+          if (resp.status === 401) {
+            throw new Error('Authentication failed: invalid credentials, either your username or password is incorrect. Please try again')
+          }
+          
           attempts.push(`${resp.status} ${resp.statusText} at ${url} (non-JSON: ${errText.slice(0, 80)})`)
         }
-      } catch {
+      } catch (e) {
+        // If we already threw a user-friendly error, re-throw it
+        if (e instanceof Error && e.message.includes('Authentication failed')) {
+          throw e
+        }
         attempts.push(`${resp.status} ${resp.statusText} at ${url}`)
       }
     }

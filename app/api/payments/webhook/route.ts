@@ -110,6 +110,7 @@ async function handleConfirmedPayment(paymentData: any) {
 
     const activationData = await activationResponse.json();
     console.log('Subscription activated successfully:', activationData);
+    console.log('✅ Activation email should have been sent to user');
     
   } catch (error) {
     console.error('Error handling confirmed payment:', error);

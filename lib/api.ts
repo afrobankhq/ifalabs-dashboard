@@ -669,12 +669,25 @@ class ApiService {
     return this.request('/api/billing/info')
   }
 
-  async getInvoices() {
+  async getBillingInvoices() {
     return this.request('/api/billing/invoices')
   }
 
   async downloadInvoice(invoiceId: string) {
     return this.request(`/api/billing/invoices/${invoiceId}/download`)
+  }
+
+  // Invoice endpoints
+  async getInvoices(userId: string) {
+    return this.request(`/api/dashboard/${encodeURIComponent(userId)}/invoices`)
+  }
+
+  async getInvoiceById(userId: string, invoiceId: string) {
+    return this.request(`/api/dashboard/${encodeURIComponent(userId)}/invoices/${encodeURIComponent(invoiceId)}`)
+  }
+
+  async getInvoiceByNumber(userId: string, invoiceNumber: string) {
+    return this.request(`/api/dashboard/${encodeURIComponent(userId)}/invoices/number/${encodeURIComponent(invoiceNumber)}`)
   }
 
   // Plan endpoints
