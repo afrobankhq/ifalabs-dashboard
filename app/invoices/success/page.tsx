@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -11,7 +11,10 @@ import { apiService, useApiCall } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
 import { ProtectedRoute } from "@/components/protected-route"
 
-export default function InvoiceSuccessPage() {
+// Force dynamic rendering
+export const dynamic = 'force-dynamic'
+
+function InvoiceSuccessContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const { toast } = useToast()
@@ -275,5 +278,27 @@ export default function InvoiceSuccessPage() {
         </div>
       </div>
     </ProtectedRoute>
+  )
+}
+
+export default function InvoiceSuccessPage() {
+  return (
+    <Suspense fallback={
+      <ProtectedRoute>
+        <div className="flex flex-1 flex-col gap-6 p-4">
+          <div className="flex items-center justify-center h-64">
+            <div className="text-center space-y-4">
+              <Loader2 className="h-12 w-12 animate-spin mx-auto text-primary" />
+              <h2 className="text-xl font-semibold">Loading...</h2>
+              <p className="text-muted-foreground">
+                Please wait while we load the page...
+              </p>
+            </div>
+          </div>
+        </div>
+      </ProtectedRoute>
+    }>
+      <InvoiceSuccessContent />
+    </Suspense>
   )
 }

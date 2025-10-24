@@ -1,7 +1,12 @@
+"use client"
+
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Home, ArrowLeft } from 'lucide-react'
+
+// Force dynamic rendering
+export const dynamic = 'force-dynamic'
 
 export default function NotFound() {
   return (

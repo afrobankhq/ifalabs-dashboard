@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -10,7 +11,11 @@ import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Loader2, Mail, ArrowRight, CheckCircle, ArrowLeft } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 
+// Force dynamic rendering
+export const dynamic = 'force-dynamic'
+
 export default function ForgotPasswordPage() {
+  const router = useRouter()
   const [email, setEmail] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
