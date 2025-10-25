@@ -5,7 +5,11 @@ const getUpstreamUrl = () => {
   const upstream = 
     process.env.PROXY_UPSTREAM_URL ||
     process.env.NEXT_PUBLIC_API_URL ||
-    'http://localhost:8000';
+    '';
+  
+  if (!upstream) {
+    throw new Error('PROXY_UPSTREAM_URL environment variable is not set. Please set it in your Vercel environment variables.');
+  }
   
   // Ensure no trailing slash
   return upstream.replace(/\/$/, '');
@@ -65,13 +69,19 @@ export async function POST(request: NextRequest) {
     console.log('[Auth Initiate] Making fetch request...');
     
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      
       const response = await fetch(proxyUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ email }),
+        signal: controller.signal,
       });
+      
+      clearTimeout(timeoutId);
 
       console.log('[Auth Initiate] Response status:', response.status);
       console.log('[Auth Initiate] Response ok:', response.ok);
@@ -125,6 +135,12 @@ export async function POST(request: NextRequest) {
       console.error('[Auth Initiate] Fetch error type:', typeof fetchError);
       console.error('[Auth Initiate] Fetch error message:', fetchError instanceof Error ? fetchError.message : String(fetchError));
       console.error('[Auth Initiate] Fetch error stack:', fetchError instanceof Error ? fetchError.stack : 'No stack trace');
+      
+      // Check if it's a timeout error
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        throw new Error('Request timed out while connecting to the backend. Please try again.');
+      }
+      
       throw fetchError;
     }
 
