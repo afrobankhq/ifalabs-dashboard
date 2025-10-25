@@ -5,11 +5,7 @@ const getUpstreamUrl = () => {
   const upstream = 
     process.env.PROXY_UPSTREAM_URL ||
     process.env.NEXT_PUBLIC_API_URL ||
-    '';
-  
-  if (!upstream) {
-    throw new Error('PROXY_UPSTREAM_URL environment variable is not set. Please set it in your Vercel environment variables.');
-  }
+    'http://localhost:8000';
   
   // Ensure no trailing slash
   return upstream.replace(/\/$/, '');
