@@ -24,19 +24,29 @@ export default function SignupPage() {
     setIsLoading(true)
     
     try {
-      console.log('[Signup] Sending verification email to:', email)
+      console.log('[Signup] Starting signup process for email:', email)
+      
+      const requestBody = { email }
+      console.log('[Signup] Request body:', requestBody)
       
       const response = await fetch('/api/auth/register/initiate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify(requestBody),
       })
 
+      console.log('[Signup] Response status:', response.status)
+      console.log('[Signup] Response ok:', response.ok)
+      console.log('[Signup] Response headers:', Object.fromEntries(response.headers.entries()))
+
       const data = await response.json()
+      console.log('[Signup] Response data:', data)
 
       if (!response.ok) {
+        console.error('[Signup] API returned error status:', response.status)
+        console.error('[Signup] Error data:', data)
         throw new Error(data.error || 'Failed to send verification email')
       }
 
@@ -47,8 +57,15 @@ export default function SignupPage() {
         description: "We've sent you a verification link to complete your registration." 
       })
     } catch (err) {
-      console.error('[Signup] Error:', err)
+      console.error('[Signup] Caught error:', err)
+      console.error('[Signup] Error type:', typeof err)
+      console.error('[Signup] Error instanceof Error:', err instanceof Error)
+      console.error('[Signup] Error message:', err instanceof Error ? err.message : String(err))
+      console.error('[Signup] Error stack:', err instanceof Error ? err.stack : 'No stack trace')
+      
       const errorMessage = err instanceof Error ? err.message : "Failed to send verification email. Please try again."
+      console.error('[Signup] Setting error message:', errorMessage)
+      
       setError(errorMessage)
       toast({ 
         title: "Signup Failed", 
@@ -56,6 +73,7 @@ export default function SignupPage() {
         variant: "destructive" 
       })
     } finally {
+      console.log('[Signup] Setting isLoading to false')
       setIsLoading(false)
     }
   }
