@@ -1,5 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// Get the upstream backend URL from environment variables
+const getUpstreamUrl = () => {
+  const upstream = 
+    process.env.PROXY_UPSTREAM_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    'http://localhost:8000';
+  
+  // Ensure no trailing slash
+  return upstream.replace(/\/$/, '');
+};
+
 /**
  * POST /api/auth/register/initiate
  * 
@@ -41,25 +52,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get Oracle Engine backend URL
-    const backendUrl = process.env.PROXY_UPSTREAM_URL || 
-                      process.env.NEXT_PUBLIC_API_URL || 
-                      process.env.ORACLE_ENGINE_URL || 
-                      'http://localhost:8000';
+    // Forward request directly to backend using PROXY_UPSTREAM_URL
+    const upstreamUrl = getUpstreamUrl();
+    const backendEndpoint = '/api/auth/register/initiate';
+    const proxyUrl = `${upstreamUrl}${backendEndpoint}`;
 
-    const endpoint = process.env.NEXT_PUBLIC_AUTH_INITIATE_REGISTER_PATH || '/api/auth/register/initiate';
-    const url = `${backendUrl}${endpoint}`;
-
-    console.log('[Auth Initiate] Backend URL:', backendUrl);
-    console.log('[Auth Initiate] Endpoint:', endpoint);
-    console.log('[Auth Initiate] Full URL:', url);
-    console.log('[Auth Initiate] Sending verification email request to:', url);
+    console.log('[Auth Initiate] Upstream URL:', upstreamUrl);
+    console.log('[Auth Initiate] Backend endpoint:', backendEndpoint);
+    console.log('[Auth Initiate] Full URL:', proxyUrl);
 
     // Forward request to Oracle Engine backend
     console.log('[Auth Initiate] Making fetch request...');
     
     try {
-      const response = await fetch(url, {
+      const response = await fetch(proxyUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -71,8 +77,33 @@ export async function POST(request: NextRequest) {
       console.log('[Auth Initiate] Response ok:', response.ok);
       console.log('[Auth Initiate] Response headers:', Object.fromEntries(response.headers.entries()));
 
-      const data = await response.json();
-      console.log('[Auth Initiate] Response data:', data);
+      // Get the raw response text first
+      const textResponse = await response.text();
+      console.log('[Auth Initiate] Raw response text (first 500 chars):', textResponse.substring(0, 500));
+      
+      // Check content type
+      const contentType = response.headers.get('content-type');
+      console.log('[Auth Initiate] Response content-type:', contentType);
+      
+      let data;
+      
+      if (contentType && contentType.includes('application/json')) {
+        try {
+          data = JSON.parse(textResponse);
+          console.log('[Auth Initiate] Response data:', data);
+        } catch (parseError) {
+          console.error('[Auth Initiate] Failed to parse JSON:', parseError);
+          console.error('[Auth Initiate] Raw text:', textResponse);
+          throw new Error(`Backend returned invalid JSON. Status: ${response.status}. Response: ${textResponse.substring(0, 200)}`);
+        }
+      } else {
+        // If not JSON, log what we received
+        console.error('[Auth Initiate] Non-JSON response received');
+        console.error('[Auth Initiate] Status:', response.status);
+        console.error('[Auth Initiate] Content-Type:', contentType);
+        console.error('[Auth Initiate] Body:', textResponse);
+        throw new Error(`Backend returned non-JSON response (${response.status}). Content-Type: ${contentType}. Body: ${textResponse.substring(0, 200)}`);
+      }
 
       if (!response.ok) {
         console.error('[Auth Initiate] Backend error - Status:', response.status);
