@@ -7,6 +7,11 @@ const getUpstreamUrl = () => {
     process.env.NEXT_PUBLIC_API_URL ||
     'http://localhost:8000';
   
+  if (!upstream || upstream === 'http://localhost:8000') {
+    console.error('[Auth Initiate] WARNING: Using default upstream URL:', upstream);
+    console.error('[Auth Initiate] PROXY_UPSTREAM_URL not set in environment variables!');
+  }
+  
   // Ensure no trailing slash
   return upstream.replace(/\/$/, '');
 };
@@ -60,6 +65,8 @@ export async function POST(request: NextRequest) {
     console.log('[Auth Initiate] Upstream URL:', upstreamUrl);
     console.log('[Auth Initiate] Backend endpoint:', backendEndpoint);
     console.log('[Auth Initiate] Full URL:', proxyUrl);
+    console.log('[Auth Initiate] PROXY_UPSTREAM_URL env var:', process.env.PROXY_UPSTREAM_URL);
+    console.log('[Auth Initiate] NEXT_PUBLIC_API_URL env var:', process.env.NEXT_PUBLIC_API_URL);
 
     // Forward request to Oracle Engine backend
     console.log('[Auth Initiate] Making fetch request...');
