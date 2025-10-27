@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
     
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout (emails can be slow to send)
       
       const response = await fetch(proxyUrl, {
         method: 'POST',
