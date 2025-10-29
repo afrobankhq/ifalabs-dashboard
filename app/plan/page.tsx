@@ -754,26 +754,38 @@ export default function PlanPage() {
           </DialogHeader>
           <div className="grid gap-4">
             <Card 
-              className="cursor-pointer hover:bg-accent transition-colors border-2 hover:border-primary"
-              onClick={() => handlePaymentMethodSelect('paystack')}
+              className="cursor-pointer hover:bg-accent transition-colors border-2 opacity-50"
+              onClick={() => {
+                toast({
+                  title: "Coming Soon",
+                  description: "Paystack payments will be available soon.",
+                  variant: "default",
+                })
+              }}
             >
               <CardContent className="flex items-center gap-4 pt-4">
-                <div className="p-2 bg-primary/10 rounded-full">
-                  <CreditCard className="h-6 w-6 text-primary" />
+                <div className="p-2 bg-muted rounded-full">
+                  <CreditCard className="h-6 w-6 text-muted-foreground" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="font-semibold">Pay with Paystack</h3>
+                  <h3 className="font-semibold text-muted-foreground">Pay with Paystack</h3>
                   <p className="text-sm text-muted-foreground">
                     Pay with debit card, bank transfer, or mobile money
                   </p>
-                  <Badge variant="secondary" className="mt-1">Instant Activation</Badge>
+                  <Badge variant="outline" className="mt-1">Coming Soon</Badge>
                 </div>
               </CardContent>
             </Card>
             
             <Card 
               className="cursor-pointer hover:bg-accent transition-colors border-2 opacity-50"
-              onClick={() => {}}
+              onClick={() => {
+                toast({
+                  title: "Coming Soon",
+                  description: "Cryptocurrency payments will be available soon.",
+                  variant: "default",
+                })
+              }}
             >
               <CardContent className="flex items-center gap-4 pt-4">
                 <div className="p-2 bg-muted rounded-full">
