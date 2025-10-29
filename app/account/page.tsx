@@ -19,7 +19,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { User, Shield, Bell, Trash2, Camera, Save, AlertTriangle, Edit, Loader2 } from "lucide-react"
+import { User, Shield, Bell, Trash2, Camera, Save, AlertTriangle, Edit, Loader2, Upload, X } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { apiService, useApiCall } from "@/lib/api"
 import { useAuth } from "@/lib/auth-context"
@@ -94,6 +94,8 @@ export default function AccountPage() {
   const [confirmPassword, setConfirmPassword] = useState("")
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [isDeletingAccount, setIsDeletingAccount] = useState(false)
+  const [isUploadingImage, setIsUploadingImage] = useState(false)
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
   const { toast } = useToast()
   const { execute: executeApiCall, loading, error } = useApiCall()
   const { user, logout } = useAuth()
@@ -257,8 +259,93 @@ export default function AccountPage() {
         website: profile.website || "",
         logo_url: profile.logo_url || "",
       })
+      setImagePreview(profile.logo_url || null)
       setIsEditDialogOpen(true)
     }
+  }
+
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    // Validate file type
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
+    if (!allowedTypes.includes(file.type)) {
+      toast({
+        title: "Invalid File Type",
+        description: "Please upload an image file (JPEG, PNG, GIF, or WebP).",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Validate file size (max 10MB)
+    const maxSize = 10 * 1024 * 1024 // 10MB
+    if (file.size > maxSize) {
+      toast({
+        title: "File Too Large",
+        description: "Image size must be less than 10MB.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    // Create preview
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      setImagePreview(reader.result as string)
+    }
+    reader.readAsDataURL(file)
+
+    // Upload to Cloudinary
+    setIsUploadingImage(true)
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const response = await fetch('/api/upload/cloudinary', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Failed to upload image')
+      }
+
+      const data = await response.json()
+      
+      // Update the logo_url in editProfile state
+      setEditProfile({
+        ...editProfile,
+        logo_url: data.url,
+      })
+
+      toast({
+        title: "Image Uploaded",
+        description: "Your logo has been uploaded successfully.",
+      })
+    } catch (err) {
+      console.error('Failed to upload image:', err)
+      setImagePreview(null)
+      toast({
+        title: "Upload Failed",
+        description: err instanceof Error ? err.message : "Failed to upload image. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsUploadingImage(false)
+      // Reset file input
+      event.target.value = ''
+    }
+  }
+
+  const handleRemoveImage = () => {
+    setImagePreview(null)
+    setEditProfile({
+      ...editProfile,
+      logo_url: "",
+    })
   }
 
   const handlePasswordChange = async () => {
@@ -651,15 +738,70 @@ export default function AccountPage() {
                   onChange={(e) => setEditProfile({ ...editProfile, name: e.target.value })}
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="edit-logo">Logo URL</Label>
-                <Input
-                  id="edit-logo"
-                  type="url"
-                  value={editProfile.logo_url}
-                  onChange={(e) => setEditProfile({ ...editProfile, logo_url: e.target.value })}
-                />
+            </div>
+            
+            {/* Logo Upload Section */}
+            <div className="space-y-2">
+              <Label>Company Logo</Label>
+              <div className="flex items-center gap-4">
+                {imagePreview ? (
+                  <div className="relative">
+                    <img
+                      src={imagePreview}
+                      alt="Logo preview"
+                      className="h-24 w-24 rounded-lg object-cover border"
+                    />
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="icon"
+                      className="absolute -top-2 -right-2 h-6 w-6 rounded-full"
+                      onClick={handleRemoveImage}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="h-24 w-24 rounded-lg border-2 border-dashed flex items-center justify-center bg-muted">
+                    <Camera className="h-8 w-8 text-muted-foreground" />
+                  </div>
+                )}
+                <div className="flex-1">
+                  <input
+                    type="file"
+                    id="logo-upload"
+                    accept="image/jpeg,image/jpg,image/png,image/gif,image/webp"
+                    onChange={handleImageUpload}
+                    className="hidden"
+                    disabled={isUploadingImage}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => document.getElementById('logo-upload')?.click()}
+                    disabled={isUploadingImage}
+                    className="w-full"
+                  >
+                    {isUploadingImage ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Uploading...
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="mr-2 h-4 w-4" />
+                        {imagePreview ? 'Change Logo' : 'Upload Logo'}
+                      </>
+                    )}
+                  </Button>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    JPEG, PNG, GIF, or WebP. Max 10MB.
+                  </p>
+                </div>
               </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="edit-first-name">First Name</Label>
                 <Input
