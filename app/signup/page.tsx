@@ -179,7 +179,7 @@ export default function SignupPage() {
                 {isLoading ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Sending verification email...
+                    Sending verification email... (this may take up to 60 seconds)
                   </>
                 ) : (
                   <>
