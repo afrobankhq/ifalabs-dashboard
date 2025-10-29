@@ -203,6 +203,34 @@ export default function AccountPage() {
   const handleProfileUpdate = async () => {
     if (!user || !profile) return
 
+    // Validate and format website URL if provided
+    let formattedWebsite = editProfile.website?.trim() || ''
+    if (formattedWebsite) {
+      try {
+        // Try to parse as URL
+        let url: URL
+        try {
+          url = new URL(formattedWebsite)
+        } catch {
+          // If parsing fails, try adding https:// prefix
+          url = new URL(`https://${formattedWebsite}`)
+          formattedWebsite = url.toString()
+        }
+        
+        // Ensure it has a protocol
+        if (!url.protocol || (!url.protocol.startsWith('http') && !url.protocol.startsWith('https'))) {
+          formattedWebsite = `https://${formattedWebsite}`
+        }
+      } catch {
+        toast({
+          title: "Invalid Website URL",
+          description: "Please enter a valid website URL or leave it empty.",
+          variant: "destructive",
+        })
+        return
+      }
+    }
+
     // Validate logo URL if provided
     if (editProfile.logo_url && editProfile.logo_url.trim() !== '') {
       try {
@@ -217,13 +245,22 @@ export default function AccountPage() {
       }
     }
 
-    // Prepare the update payload, omitting empty logo_url
-    let updatePayload: UpdateProfileRequest
-    if (!editProfile.logo_url || editProfile.logo_url.trim() === '') {
-      const { logo_url, ...payloadWithoutLogo } = editProfile
-      updatePayload = payloadWithoutLogo
-    } else {
-      updatePayload = { ...editProfile }
+    // Prepare the update payload, omitting empty optional fields
+    const updatePayload: any = {
+      name: editProfile.name,
+      first_name: editProfile.first_name,
+      last_name: editProfile.last_name,
+      description: editProfile.description,
+    }
+
+    // Only include website if it's not empty
+    if (formattedWebsite) {
+      updatePayload.website = formattedWebsite
+    }
+
+    // Only include logo_url if it's not empty
+    if (editProfile.logo_url && editProfile.logo_url.trim() !== '') {
+      updatePayload.logo_url = editProfile.logo_url.trim()
     }
 
     try {
